@@ -1424,14 +1424,11 @@ function App() {
                   <tr>
                     <th>Nro Orden</th>
                     <th>Proyecto</th>
-                    <th>Empresa</th>
-                    <th>{type === 'OC' ? 'Proveedor' : 'Socio de Negocio'}</th>
+                    <th>Proveedor</th>
                     <th>Fecha</th>
-                    <th>Estado</th>
-                    <th>Facturación</th>
-                    <th style={{ textAlign: 'right' }}>Saldo Pagar</th>
+                    <th style={{ textAlign: 'right' }}>Items</th>
                     <th style={{ textAlign: 'right' }}>Monto Total</th>
-                    <th style={{ textAlign: 'center' }}>Ver</th>
+                    <th style={{ textAlign: 'center' }}>Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1440,19 +1437,6 @@ function App() {
                     const sp = getSimpleProject(order.proyecto);
                     const projectBadgeClass = `badge badge-${sp.toLowerCase()}`;
                     
-                    let statusClass = 'status-pendiente';
-                    if (order.estado.toLowerCase().includes('aprob') || order.estado.toLowerCase().includes('emit') || order.estado.toLowerCase().includes('almacen') || order.estado.toLowerCase().includes('subcontrato')) {
-                      statusClass = 'status-aprobado';
-                    } else if (order.estado.toLowerCase().includes('anul') || order.estado.toLowerCase().includes('canc')) {
-                      statusClass = 'status-anulado';
-                    }
-
-                    let factClass = 'status-pendiente';
-                    if (order.estado_facturacion?.toLowerCase().includes('total')) factClass = 'status-aprobado';
-                    else if (order.estado_facturacion?.toLowerCase().includes('parcial')) factClass = 'status-pendiente';
-                    else if (order.estado_facturacion?.toLowerCase().includes('sin') || order.estado_facturacion?.toLowerCase().includes('no')) factClass = 'status-anulado';
-                    else if (order.estado_facturacion?.toLowerCase().includes('sobre')) factClass = 'status-anulado';
-
                     return (
                       <React.Fragment key={order.id}>
                         <tr className={isExpanded ? 'expanded' : ''}>
@@ -1460,119 +1444,59 @@ function App() {
                           <td>
                             <span className={projectBadgeClass}>{sp}</span>
                           </td>
-                          <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                            {order.empresa_proyecto || 'S/N'}
-                          </td>
                           <td>
                             <div style={{ fontWeight: '500' }}>{order.proveedor}</div>
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>RUC: {order.ruc}</span>
                           </td>
                           <td>{order.fecha}</td>
-                          <td>
-                            <span className={`badge ${statusClass}`} style={{ borderRadius: '4px' }}>
-                              {order.estado}
-                            </span>
-                          </td>
-                          <td>
-                            <span className={`badge ${factClass}`} style={{ borderRadius: '4px', fontSize: '11px' }}>
-                              {order.estado_facturacion || 'Sin Facturación'}
-                            </span>
-                          </td>
-                          <td style={{ textAlign: 'right', color: order.saldo_por_pagar > 0 ? 'var(--color-danger)' : 'var(--text-secondary)', fontWeight: '500' }}>
-                            {formatCurrency(order.saldo_por_pagar, order.moneda)}
-                          </td>
+                          <td style={{ textAlign: 'right' }}>{order.items.length}</td>
                           <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
                             {formatCurrency(order.total_con_igv, order.moneda)}
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             <button onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
-                              style={{ background: 'none', border: 'none', color: 'var(--color-primary)', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center' }}>
+                              className="btn-outline" style={{ padding: '4px 8px', border: 'none' }}>
                               {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                             </button>
                           </td>
                         </tr>
 
-                        {/* Expanded Row */}
+                        {/* Expanded Row: Focus exclusively on Resources */}
                         {isExpanded && (
                           <tr className="details-row">
-                            <td colSpan="10">
-                              <div className="details-wrapper">
-                                <div className="details-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <span style={{ fontSize: '15px', fontWeight: '700' }}>Detalle de la Orden {order.nro_orden}</span>
-                                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                                    Origen: <code>{order.archivo_origen}</code>
-                                  </span>
+                            <td colSpan="7">
+                              <div className="details-wrapper" style={{ padding: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                  <h4 style={{ fontSize: '15px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                    Recursos de la Orden {order.nro_orden}
+                                  </h4>
+                                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Archivo: {order.archivo_origen}</span>
                                 </div>
-
-                                <div className="details-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', margin: '16px 0', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{type === 'OC' ? 'Proveedor / RUC' : 'Socio de Negocio / RUC'}</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.proveedor} ({order.ruc || 'S/N'})</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Gestor de Compra</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.gestor_compra}</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Solicitante / Creado Por</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.solicitante || 'Sin Asignar'} / {order.creado_por}</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Empresa del Proyecto</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.empresa_proyecto || 'S/N'}</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Pedidos Asociados</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.pedidos || 'Ninguno'}</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Fecha de Entrega / Período</span>
-                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.fecha_entrega || 'No Definida'} {order.anio_mes ? `(${order.anio_mes})` : ''}</span>
-                                  </div>
-                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px', gridColumn: 'span 3' }}>
-                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Aprobadores</span>
-                                    <span className="details-val" style={{ fontSize: '12px', fontWeight: '500', color: 'var(--text-secondary)', lineHeight: '1.4' }}>{order.aprobador || 'Sin Aprobadores'}</span>
-                                  </div>
-                                  {order.observacion && (
-                                    <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px', gridColumn: 'span 3' }}>
-                                      <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Observaciones</span>
-                                      <span className="details-val" style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.4', maxHeight: '80px', overflow: 'hidden' }}>{order.observacion}</span>
-                                    </div>
-                                  )}
-                                </div>
-
-                                <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                                  Ítems del Detalle ({order.items.length})
-                                </h4>
 
                                 <table className="items-table">
                                   <thead>
                                     <tr>
                                       <th>Descripción Recurso</th>
-                                      <th style={{ textAlign: 'center' }}>Unidad</th>
-                                      <th style={{ textAlign: 'right' }}>Cant. Total</th>
-                                      <th style={{ textAlign: 'right' }}>Cant. Atendida</th>
-                                      <th style={{ textAlign: 'right' }}>Por Atender</th>
-                                      <th style={{ textAlign: 'right' }}>Precio s/IGV</th>
-                                      <th style={{ textAlign: 'right' }}>Precio c/IGV</th>
+                                      <th style={{ textAlign: 'center' }}>Und.</th>
+                                      <th style={{ textAlign: 'right' }}>Cantidad</th>
+                                      <th style={{ textAlign: 'right' }}>P. Unit c/IGV</th>
                                       <th style={{ textAlign: 'right' }}>Total</th>
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {order.items.map((item, idx) => (
                                       <tr key={item.id || idx}>
-                                        <td>{item.recurso}</td>
+                                        <td style={{ fontWeight: '600', padding: '12px' }}>{item.recurso}</td>
                                         <td style={{ textAlign: 'center' }}>{item.unidad}</td>
                                         <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
-                                        <td style={{ textAlign: 'right', color: item.cant_atendida > 0 ? 'var(--color-success)' : 'inherit' }}>
-                                          {item.cant_atendida.toLocaleString()}
+                                        <td style={{ textAlign: 'right' }}>
+                                          <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                          {item.precio_con_igv.toFixed(2)}
                                         </td>
-                                        <td style={{ textAlign: 'right', color: item.cant_por_atender > 0 ? 'var(--color-warning)' : 'inherit' }}>
-                                          {item.cant_por_atender.toLocaleString()}
+                                        <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                                          <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                          {item.total.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
                                         </td>
-                                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.precio_sin_igv, order.moneda)}</td>
-                                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.precio_con_igv, order.moneda)}</td>
-                                        <td style={{ textAlign: 'right', fontWeight: '600' }}>{formatCurrency(item.total, order.moneda)}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -1582,6 +1506,11 @@ function App() {
                           </tr>
                         )}
                       </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>                      </React.Fragment>
                     );
                   })}
                 </tbody>
