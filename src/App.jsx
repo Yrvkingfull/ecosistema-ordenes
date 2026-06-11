@@ -598,9 +598,17 @@ function App() {
     return symbol + ' ' + amt.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
+  // Get project accent colors
+  const getProjectColor = (p) => {
+    const proj = String(p || '').toUpperCase().trim();
+    if (proj === 'LITORAL') return 'var(--color-litoral)';
+    if (proj === 'SB') return 'var(--color-sb)';
+    if (proj === 'SUNNY') return 'var(--color-sunny)';
+    return 'var(--text-muted)';
+  };
+
   // Financial Stats Dashboard Engine (Differentiating OC and OS side-by-side)
   const dashboardStats = React.useMemo(() => {
-    // We only compute stats for orders filtered by project (so project selector updates both sides)
     const projectFiltered = allGroupedOrders.filter(o => selectedProject === 'all' || o.proyecto === selectedProject);
 
     const ocOrders = projectFiltered.filter(o => o.tipo_orden === 'OC');
@@ -624,20 +632,15 @@ function App() {
           pen += amt;
         }
 
-        // Combine into a single USD equivalent for graphs
         const usdEquivalent = cur === 'USD' ? amt : amt / 3.8;
-
-        // Provider accumulation
         providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + usdEquivalent;
 
-        // Project accumulation
         if (o.proyecto === 'LITORAL') projectSpend.LITORAL += usdEquivalent;
         else if (o.proyecto === 'SB') projectSpend.SB += usdEquivalent;
         else if (o.proyecto === 'SUNNY') projectSpend.SUNNY += usdEquivalent;
         else projectSpend.OTHER += usdEquivalent;
       });
 
-      // Format top 5 providers
       const topProviders = Object.entries(providerSpend)
         .map(([name, val]) => ({ name, val }))
         .sort((a, b) => b.val - a.val)
@@ -653,6 +656,226 @@ function App() {
       totalCount: projectFiltered.length
     };
   }, [allGroupedOrders, selectedProject]);
+
+  // Custom CSV Exporter
+  const exportToCSV = () => {
+    let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+    csvContent += "Nro Orden,Proyecto,Tipo,Proveedor,RUC,Fecha,Estado,Moneda,Total con IGV,Gestor,Creado Por\n";
+
+    filteredOrders.forEach((o) => {
+      const row = [
+        o.nro_orden,
+        o.proyecto,
+        o.tipo_orden,
+        `"${o.proveedor.replace(/"/g, '""')}"`,
+        o.ruc || 'S/N',
+        o.fecha,
+        o.estado,
+        o.moneda,
+        o.total_con_igv.toFixed(2),
+        `"${o.gestor_compra.replace(/"/g, '""')}"`,
+        `"${o.creado_por.replace(/"/g, '""')}"`
+      ].join(",");
+      csvContent += row + "\n";
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `reporte_ordenes_${selectedProject}_${selectedType}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // RENDER: Auth Screen for Supabase mode (if not signed in)
+  if (isSupabaseConfigured && !session) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        backgroundColor: '#0b0f19',
+        fontFamily: 'var(--font-sans)',
+        color: '#f8fafc',
+        padding: '24px',
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        {/* Background Gradients */}
+        <div style={{
+          position: 'absolute',
+          top: '-10%',
+          left: '-10%',
+          width: '50%',
+          height: '50%',
+          background: 'radial-gradient(circle, rgba(37, 99, 235, 0.1) 0%, transparent 70%)',
+          zIndex: 0
+        }}></div>
+        <div style={{
+          position: 'absolute',
+          bottom: '-10%',
+          right: '-10%',
+          width: '50%',
+          height: '50%',
+          background: 'radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%)',
+          zIndex: 0
+        }}></div>
+
+        <div style={{
+          width: '100%',
+          maxWidth: '440px',
+          background: 'rgba(15, 23, 42, 0.75)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '24px',
+          padding: '40px',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+          zIndex: 1
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '32px' }}>
+            <div style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, #2563eb, #8b5cf6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)'
+            }}>
+              <BarChart2 size={24} />
+            </div>
+            <span style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px' }}>
+              Ecosistema Órdenes
+            </span>
+          </div>
+
+          <div style={{ marginBottom: '24px', textAlign: 'center' }}>
+            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>
+              {isRegistering ? 'Crear una cuenta nueva' : 'Bienvenido de nuevo'}
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              {isRegistering ? 'Regístrate para colaborar en tiempo real.' : 'Inicia sesión para sincronizar órdenes en la nube.'}
+            </p>
+          </div>
+
+          {authError && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 16px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.2)',
+              borderRadius: '8px',
+              color: '#f87171',
+              fontSize: '13px',
+              marginBottom: '20px'
+            }}>
+              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Correo Electrónico</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <Mail size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
+                <input 
+                  type="email" 
+                  value={authEmail} 
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="tuemail@proyecto.com"
+                  style={{
+                    width: '100%',
+                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '8px',
+                    padding: '12px 16px 12px 40px',
+                    color: '#f8fafc',
+                    fontFamily: 'var(--font-sans)',
+                    outline: 'none',
+                    fontSize: '14px'
+                  }}
+                  required
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contraseña</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <Lock size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
+                <input 
+                  type="password" 
+                  value={authPassword} 
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{
+                    width: '100%',
+                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '8px',
+                    padding: '12px 16px 12px 40px',
+                    color: '#f8fafc',
+                    fontFamily: 'var(--font-sans)',
+                    outline: 'none',
+                    fontSize: '14px'
+                  }}
+                  required
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              disabled={authLoading}
+              className="btn-primary" 
+              style={{
+                width: '100%',
+                padding: '12px',
+                borderRadius: '8px',
+                justifyContent: 'center',
+                marginTop: '12px'
+              }}
+            >
+              {authLoading ? 'Procesando...' : (isRegistering ? 'Registrarse' : 'Iniciar Sesión')}
+              <ArrowRight size={18} />
+            </button>
+          </form>
+
+          <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '13px' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {isRegistering ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta aún?'}
+            </span>{' '}
+            <button 
+              onClick={() => {
+                setIsRegistering(!isRegistering);
+                setAuthError(null);
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-primary)',
+                fontWeight: '600',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-sans)',
+                textDecoration: 'underline'
+              }}
+            >
+              {isRegistering ? 'Inicia sesión aquí' : 'Regístrate aquí'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
