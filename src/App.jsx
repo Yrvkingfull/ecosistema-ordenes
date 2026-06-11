@@ -26,7 +26,9 @@ import {
   LogOut,
   Cloud,
   Database,
-  ArrowRight
+  ArrowRight,
+  TrendingDown,
+  Percent
 } from 'lucide-react';
 import { getOrders, saveOrders, getFilesLog, saveFilesLog, clearAllDB } from './db';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
@@ -63,15 +65,13 @@ function App() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'syncing' | 'success' | 'error'
+  const [syncStatus, setSyncStatus] = useState('idle'); 
 
   // Initialize DB and Load Data
   useEffect(() => {
-    // Set theme
     document.documentElement.className = themeMode === 'light' ? 'light-mode' : '';
 
     if (isSupabaseConfigured) {
-      // 1. Supabase Mode Setup
       supabase.auth.getSession().then(({ data: { session } }) => {
         setSession(session);
         if (session) {
@@ -94,12 +94,11 @@ function App() {
 
       return () => subscription.unsubscribe();
     } else {
-      // 2. Local Mode Setup
       loadLocalData();
     }
   }, []);
 
-  // Fetch orders from Supabase PostgreSQL
+  // Fetch orders from Supabase
   const fetchSupabaseOrders = async () => {
     setLoading(true);
     try {
@@ -112,12 +111,13 @@ function App() {
 
       setOrders(data || []);
 
-      // Group file names for the files log
+      // Group files
       const filesMap = {};
       data.forEach(row => {
-        if (row.archivo_origen && !filesMap[row.archivo_origen]) {
-          filesMap[row.archivo_origen] = {
-            name: row.archivo_origen,
+        const fileKey = row.archivo_origen || 'Carga Nube';
+        if (!filesMap[fileKey]) {
+          filesMap[fileKey] = {
+            name: fileKey,
             project: row.proyecto,
             type: row.tipo_orden,
             rowCount: 0,
@@ -125,9 +125,7 @@ function App() {
             uploadedAt: new Date(row.created_at).toLocaleDateString() + ' ' + new Date(row.created_at).toLocaleTimeString()
           };
         }
-        if (row.archivo_origen) {
-          filesMap[row.archivo_origen].rowCount++;
-        }
+        filesMap[fileKey].rowCount++;
       });
       setFilesLog(Object.values(filesMap));
     } catch (err) {
@@ -138,7 +136,7 @@ function App() {
     }
   };
 
-  // Load local IndexedDB database
+  // Load local IndexedDB
   const loadLocalData = async () => {
     setLoading(true);
     try {
@@ -159,7 +157,7 @@ function App() {
     document.documentElement.className = nextTheme === 'light' ? 'light-mode' : '';
   };
 
-  // Safe helper to parse numbers
+  // Safe number parser
   const parseNum = (val) => {
     if (val === null || val === undefined) return 0;
     if (typeof val === 'number') return val;
@@ -171,7 +169,6 @@ function App() {
   // Smart fuzzy mapper to normalize Excel column names
   const normalizeRow = (rawRow, fileName, defaultProject, defaultType) => {
     const row = {};
-    // Lowercase and strip accents/spaces helper
     const cleanKey = (k) => String(k).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
     Object.keys(rawRow).forEach((key) => {
@@ -212,25 +209,32 @@ function App() {
       }
     });
 
+    // Casing and encodings for currency
+    const m = String(row.moneda || '').toUpperCase().trim();
+    if (m === 'USD' || m === 'DOLARES' || m === 'US$' || m === 'U$') {
+      row.moneda = 'USD';
+    } else {
+      row.moneda = 'PEN'; // default to Peruvian Soles (S/.)
+    }
+
     // Fallbacks
-    row.proyecto = row.proyecto || defaultProject;
+    row.proyecto = String(row.proyecto || defaultProject).toUpperCase().trim();
     row.tipo_orden = defaultType;
     row.nro_orden = row.nro_orden || 'S/N';
-    row.proveedor = row.proveedor || 'PROVEEDOR DESCONOCIDO';
+    row.proveedor = String(row.proveedor || 'PROVEEDOR DESCONOCIDO').trim();
     row.recurso = row.recurso || 'ÍTEM SIN DESCRIPCIÓN';
     row.cantidad = row.cantidad || 1;
     row.parcial_final = row.parcial_final || ((row.precio_con_igv || row.precio_sin_igv || 0) * row.cantidad);
     row.precio_con_igv = row.precio_con_igv || (row.cantidad ? row.parcial_final / row.cantidad : 0);
     row.precio_sin_igv = row.precio_sin_igv || row.precio_con_igv / 1.18;
     row.estado = row.estado || 'Emitido';
-    row.moneda = row.moneda || 'COP';
     row.fecha = row.fecha || 'Sin Fecha';
     row.archivo_origen = fileName;
 
     return row;
   };
 
-  // Handle excel files parsing & database syncing
+  // Process files
   const handleFiles = async (fileList) => {
     setLoading(true);
     setSyncStatus('syncing');
@@ -243,11 +247,11 @@ function App() {
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
       if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
-        alert(`El archivo ${file.name} no es un archivo Excel válido (.xlsx o .xls).`);
+        alert(`El archivo ${file.name} no es un archivo Excel válido.`);
         continue;
       }
 
-      // Detect project and order type from filename
+      // Default type based on name
       const fn = file.name.toUpperCase();
       let detectedType = 'OC';
       if (fn.startsWith('OS') || fn.includes('OS ')) {
@@ -266,24 +270,71 @@ function App() {
       try {
         const data = await file.arrayBuffer();
         const workbook = XLSX.read(data, { cellDates: true, dateNF: 'YYYY-MM-DD' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const jsonRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-
-        const parsedRows = jsonRows.map(rawRow => 
-          normalizeRow(rawRow, file.name, detectedProject, detectedType)
-        );
-
-        parsedRowsAllFiles.push({ fileName: file.name, rows: parsedRows });
         
-        filesToUploadInfo.push({
-          name: file.name,
-          project: detectedProject,
-          type: detectedType,
-          rowCount: parsedRows.length,
-          size: (file.size / 1024).toFixed(1) + ' KB',
-          uploadedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString()
-        });
+        let sheetsToParse = [];
+
+        // Check if file is combined (e.g. DETALLES.xlsx with EXPORTADOS_OC and EXPORTADOS_OS sheets)
+        const hasSpecificOC = workbook.SheetNames.some(name => name.toUpperCase() === 'EXPORTADOS_OC' || name.toUpperCase() === 'OC');
+        const hasSpecificOS = workbook.SheetNames.some(name => name.toUpperCase() === 'EXPORTADOS_OS' || name.toUpperCase() === 'OS');
+
+        if (hasSpecificOC || hasSpecificOS) {
+          workbook.SheetNames.forEach(name => {
+            const upperName = name.toUpperCase();
+            if (upperName === 'EXPORTADOS_OC' || upperName === 'OC') {
+              sheetsToParse.push({
+                name,
+                type: 'OC',
+                worksheet: workbook.Sheets[name]
+              });
+            } else if (upperName === 'EXPORTADOS_OS' || upperName === 'OS') {
+              sheetsToParse.push({
+                name,
+                type: 'OS',
+                worksheet: workbook.Sheets[name]
+              });
+            }
+          });
+        } else {
+          // Standard single sheet
+          const firstSheetName = workbook.SheetNames[0];
+          sheetsToParse.push({
+            name: firstSheetName,
+            type: detectedType,
+            worksheet: workbook.Sheets[firstSheetName]
+          });
+        }
+
+        // Clean local/cloud details for this specific file name
+        newOrders = newOrders.filter(o => o.archivo_origen !== file.name);
+
+        for (const sheet of sheetsToParse) {
+          const jsonRows = XLSX.utils.sheet_to_json(sheet.worksheet, { defval: '' });
+          
+          const parsedRows = jsonRows
+            .filter(rawRow => Object.keys(rawRow).length > 2)
+            .map(rawRow => {
+              const row = normalizeRow(rawRow, file.name, detectedProject, sheet.type);
+              
+              // If Excel contains a "Source.Name" column, use that as the origin filename!
+              if (rawRow['Source.Name']) {
+                row.archivo_origen = String(rawRow['Source.Name']).trim();
+              }
+              return row;
+            });
+
+          if (parsedRows.length > 0) {
+            parsedRowsAllFiles.push({ fileName: file.name, rows: parsedRows });
+            
+            filesToUploadInfo.push({
+              name: file.name + ` (${sheet.name})`,
+              project: detectedProject,
+              type: sheet.type,
+              rowCount: parsedRows.length,
+              size: (file.size / 1024).toFixed(1) + ' KB',
+              uploadedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString()
+            });
+          }
+        }
 
       } catch (err) {
         console.error('Error processing excel file:', err);
@@ -292,24 +343,26 @@ function App() {
     }
 
     if (isSupabaseConfigured && session) {
-      // 1. Supabase Mode Sync
       try {
         for (const fileData of parsedRowsAllFiles) {
-          // Clear old records for this file first
-          const { error: deleteError } = await supabase
-            .from('order_details')
-            .delete()
-            .eq('archivo_origen', fileData.fileName);
+          // Extract sub-files if there are Source.Name references to delete them accurately
+          const uniqueOriginFiles = [...new Set(fileData.rows.map(r => r.archivo_origen))];
+          
+          for (const originFile of uniqueOriginFiles) {
+            const { error: deleteError } = await supabase
+              .from('order_details')
+              .delete()
+              .eq('archivo_origen', originFile);
 
-          if (deleteError) throw deleteError;
+            if (deleteError) throw deleteError;
+          }
 
-          // Insert in chunks of 500 rows to prevent DB limits
           const rowsWithUser = fileData.rows.map(r => ({
             ...r,
             user_id: session.user.id
           }));
 
-          const chunkSize = 500;
+          const chunkSize = 400;
           for (let idx = 0; idx < rowsWithUser.length; idx += chunkSize) {
             const chunk = rowsWithUser.slice(idx, idx + chunkSize);
             const { error: insertError } = await supabase
@@ -325,14 +378,17 @@ function App() {
       } catch (e) {
         console.error('Error syncing with Supabase:', e);
         setSyncStatus('error');
-        alert('Error de sincronización con la base de datos Supabase: ' + e.message);
+        alert('Error al guardar en Supabase: ' + e.message);
         setLoading(false);
       }
     } else {
-      // 2. Local Mode Save
+      // Local Mode Save
       try {
         for (const fileData of parsedRowsAllFiles) {
-          newOrders = newOrders.filter(o => o.archivo_origen !== fileData.fileName);
+          const uniqueOriginFiles = [...new Set(fileData.rows.map(r => r.archivo_origen))];
+          uniqueOriginFiles.forEach(originFile => {
+            newOrders = newOrders.filter(o => o.archivo_origen !== originFile);
+          });
           newOrders.push(...fileData.rows);
         }
 
@@ -385,7 +441,7 @@ function App() {
   };
 
   const handleClearDatabase = async () => {
-    if (window.confirm('¿Estás seguro de que deseas vaciar toda la base de datos? Se borrarán todos los registros cargados.')) {
+    if (window.confirm('¿Estás seguro de que deseas vaciar toda la base de datos?')) {
       setLoading(true);
       if (isSupabaseConfigured && session) {
         try {
@@ -417,7 +473,6 @@ function App() {
     }
   };
 
-  // Auth Operations
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthLoading(true);
@@ -436,7 +491,7 @@ function App() {
           password: authPassword
         });
         if (error) throw error;
-        alert('¡Registro completo! Verifica tu correo electrónico para confirmar la cuenta si corresponde, o inicia sesión.');
+        alert('¡Registro completo! Inicia sesión para continuar.');
         setIsRegistering(false);
       } else {
         const { error } = await supabase.auth.signInWithPassword({
@@ -446,8 +501,8 @@ function App() {
         if (error) throw error;
       }
     } catch (err) {
-      console.error('Auth error:', err);
-      setAuthError(err.message || 'Ocurrió un error en la autenticación.');
+      console.error(err);
+      setAuthError(err.message || 'Error en la autenticación.');
     } finally {
       setAuthLoading(false);
     }
@@ -464,7 +519,7 @@ function App() {
     }
   };
 
-  // Group detailed rows into order headers
+  // Group detailed rows into orders
   const getGroupedOrders = () => {
     const groups = {};
     orders.forEach((row) => {
@@ -490,7 +545,6 @@ function App() {
         };
       }
       
-      // Accumulate totals
       groups[key].total_sin_igv += row.precio_sin_igv * row.cantidad;
       groups[key].total_con_igv += row.parcial_final;
       
@@ -510,10 +564,9 @@ function App() {
 
   const allGroupedOrders = getGroupedOrders();
 
-  // Extract dynamic filters
   const statuses = ['all', ...new Set(allGroupedOrders.map(o => o.estado).filter(Boolean))];
 
-  // Filtering Logic
+  // Apply filters
   const filteredOrders = allGroupedOrders.filter((order) => {
     const matchesSearch = 
       String(order.nro_orden).toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -529,7 +582,6 @@ function App() {
     return matchesSearch && matchesProject && matchesType && matchesStatus;
   });
 
-  // Pagination Logic
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredOrders.slice(indexOfFirstItem, indexOfLastItem);
@@ -537,306 +589,74 @@ function App() {
 
   const paginate = (pageNumber) => setCurrentPage(pageNumber);
 
-  // Financial Stats
-  const totals = React.useMemo(() => {
-    let usdTotal = 0;
-    let penTotal = 0;
-    let copTotal = 0;
-    
-    let totalOrdersCount = allGroupedOrders.length;
-    let ocCount = allGroupedOrders.filter(o => o.tipo_orden === 'OC').length;
-    let osCount = allGroupedOrders.filter(o => o.tipo_orden === 'OS').length;
-    
-    const uniqueSuppliers = new Set(allGroupedOrders.map(o => o.proveedor)).size;
-    
-    const projectSpend = { LITORAL: 0, SB: 0, SUNNY: 0, OTHER: 0 };
-
-    allGroupedOrders.forEach((o) => {
-      const amt = o.total_con_igv;
-      const currency = String(o.moneda).toUpperCase();
-      
-      // Accumulate totals based on currency
-      if (currency === 'USD' || currency === 'DOLARES' || currency === 'US$') {
-        usdTotal += amt;
-      } else if (currency === 'COP') {
-        copTotal += amt;
-      } else {
-        penTotal += amt;
-      }
-
-      // Convert to a single index currency for graphing comparison (USD equivalent)
-      let usdEquivalent = amt;
-      if (currency === 'COP') {
-        usdEquivalent = amt / 4000;
-      } else if (currency === 'PEN' || currency === 'SOLES' || currency === 'S/.') {
-        usdEquivalent = amt / 3.8;
-      }
-
-      if (o.proyecto === 'LITORAL') {
-        projectSpend.LITORAL += usdEquivalent;
-      } else if (o.proyecto === 'SB') {
-        projectSpend.SB += usdEquivalent;
-      } else if (o.proyecto === 'SUNNY') {
-        projectSpend.SUNNY += usdEquivalent;
-      } else {
-        projectSpend.OTHER += usdEquivalent;
-      }
-    });
-
-    return {
-      usd: usdTotal,
-      pen: penTotal,
-      cop: copTotal,
-      ordersCount: totalOrdersCount,
-      ocCount,
-      osCount,
-      uniqueSuppliers,
-      projectSpend
-    };
-  }, [allGroupedOrders]);
-
   // Formatter helpers
   const formatCurrency = (amt, currency) => {
-    const cur = String(currency).toUpperCase();
-    let symbol = '$';
-    if (cur === 'USD' || cur === 'DOLARES' || cur === 'US$') symbol = 'US$';
+    const cur = String(currency).toUpperCase().trim();
+    let symbol = 'S/.';
+    if (cur === 'USD' || cur === 'DOLARES' || cur === 'US$' || cur === 'U$') symbol = 'U$';
     else if (cur === 'PEN' || cur === 'SOLES' || cur === 'S/.') symbol = 'S/.';
-    else if (cur === 'COP') symbol = 'COP $';
-    
-    return symbol + ' ' + amt.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return symbol + ' ' + amt.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  // Custom CSV Exporter
-  const exportToCSV = () => {
-    let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
-    csvContent += "Nro Orden,Proyecto,Tipo,Proveedor,RUC,Fecha,Estado,Moneda,Total con IGV,Gestor,Creado Por\n";
+  // Financial Stats Dashboard Engine (Differentiating OC and OS side-by-side)
+  const dashboardStats = React.useMemo(() => {
+    // We only compute stats for orders filtered by project (so project selector updates both sides)
+    const projectFiltered = allGroupedOrders.filter(o => selectedProject === 'all' || o.proyecto === selectedProject);
 
-    filteredOrders.forEach((o) => {
-      const row = [
-        o.nro_orden,
-        o.proyecto,
-        o.tipo_orden,
-        `"${o.proveedor.replace(/"/g, '""')}"`,
-        o.ruc || 'S/N',
-        o.fecha,
-        o.estado,
-        o.moneda,
-        o.total_con_igv.toFixed(2),
-        `"${o.gestor_compra.replace(/"/g, '""')}"`,
-        `"${o.creado_por.replace(/"/g, '""')}"`
-      ].join(",");
-      csvContent += row + "\n";
-    });
+    const ocOrders = projectFiltered.filter(o => o.tipo_orden === 'OC');
+    const osOrders = projectFiltered.filter(o => o.tipo_orden === 'OS');
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `reporte_ordenes_${selectedProject}_${selectedType}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+    const calculateMetrics = (ordersList) => {
+      let usd = 0;
+      let pen = 0;
+      let count = ordersList.length;
 
-  // Get project accent colors
-  const getProjectColor = (p) => {
-    if (p === 'LITORAL') return 'var(--color-litoral)';
-    if (p === 'SB') return 'var(--color-sb)';
-    if (p === 'SUNNY') return 'var(--color-sunny)';
-    return 'var(--text-muted)';
-  };
+      const providerSpend = {};
+      const projectSpend = { LITORAL: 0, SB: 0, SUNNY: 0, OTHER: 0 };
 
-  // RENDER: Auth Screen for Supabase mode (if not signed in)
-  if (isSupabaseConfigured && !session) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '100vh',
-        backgroundColor: '#0b0f19',
-        fontFamily: 'var(--font-sans)',
-        color: '#f8fafc',
-        padding: '24px',
-        position: 'relative',
-        overflow: 'hidden'
-      }}>
-        {/* Background Gradients */}
-        <div style={{
-          position: 'absolute',
-          top: '-10%',
-          left: '-10%',
-          width: '50%',
-          height: '50%',
-          background: 'radial-gradient(circle, rgba(37, 99, 235, 0.1) 0%, transparent 70%)',
-          zIndex: 0
-        }}></div>
-        <div style={{
-          position: 'absolute',
-          bottom: '-10%',
-          right: '-10%',
-          width: '50%',
-          height: '50%',
-          background: 'radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%)',
-          zIndex: 0
-        }}></div>
+      ordersList.forEach(o => {
+        const amt = o.total_con_igv;
+        const cur = o.moneda;
 
-        <div style={{
-          width: '100%',
-          maxWidth: '440px',
-          background: 'rgba(15, 23, 42, 0.75)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: '24px',
-          padding: '40px',
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-          zIndex: 1
-        }}>
-          {/* Logo */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '32px' }}>
-            <div style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '12px',
-              background: 'linear-gradient(135deg, #2563eb, #8b5cf6)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)'
-            }}>
-              <BarChart2 size={24} />
-            </div>
-            <span style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px' }}>
-              Ecosistema Órdenes
-            </span>
-          </div>
+        if (cur === 'USD') {
+          usd += amt;
+        } else {
+          pen += amt;
+        }
 
-          <div style={{ marginBottom: '24px', textAlign: 'center' }}>
-            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>
-              {isRegistering ? 'Crear una cuenta nueva' : 'Bienvenido de nuevo'}
-            </h2>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-              {isRegistering ? 'Regístrate para colaborar en tiempo real.' : 'Inicia sesión para sincronizar órdenes en la nube.'}
-            </p>
-          </div>
+        // Combine into a single USD equivalent for graphs
+        const usdEquivalent = cur === 'USD' ? amt : amt / 3.8;
 
-          {authError && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 16px',
-              backgroundColor: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.2)',
-              borderRadius: '8px',
-              color: '#f87171',
-              fontSize: '13px',
-              marginBottom: '20px'
-            }}>
-              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
-              <span>{authError}</span>
-            </div>
-          )}
+        // Provider accumulation
+        providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + usdEquivalent;
 
-          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Correo Electrónico</label>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <Mail size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
-                <input 
-                  type="email" 
-                  value={authEmail} 
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  placeholder="tuemail@proyecto.com"
-                  style={{
-                    width: '100%',
-                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: '8px',
-                    padding: '12px 16px 12px 40px',
-                    color: '#f8fafc',
-                    fontFamily: 'var(--font-sans)',
-                    outline: 'none',
-                    fontSize: '14px'
-                  }}
-                  required
-                />
-              </div>
-            </div>
+        // Project accumulation
+        if (o.proyecto === 'LITORAL') projectSpend.LITORAL += usdEquivalent;
+        else if (o.proyecto === 'SB') projectSpend.SB += usdEquivalent;
+        else if (o.proyecto === 'SUNNY') projectSpend.SUNNY += usdEquivalent;
+        else projectSpend.OTHER += usdEquivalent;
+      });
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contraseña</label>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <Lock size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
-                <input 
-                  type="password" 
-                  value={authPassword} 
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="••••••••"
-                  style={{
-                    width: '100%',
-                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: '8px',
-                    padding: '12px 16px 12px 40px',
-                    color: '#f8fafc',
-                    fontFamily: 'var(--font-sans)',
-                    outline: 'none',
-                    fontSize: '14px'
-                  }}
-                  required
-                />
-              </div>
-            </div>
+      // Format top 5 providers
+      const topProviders = Object.entries(providerSpend)
+        .map(([name, val]) => ({ name, val }))
+        .sort((a, b) => b.val - a.val)
+        .slice(0, 5);
 
-            <button 
-              type="submit" 
-              disabled={authLoading}
-              className="btn-primary" 
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: '8px',
-                justifyContent: 'center',
-                marginTop: '12px'
-              }}
-            >
-              {authLoading ? 'Procesando...' : (isRegistering ? 'Registrarse' : 'Iniciar Sesión')}
-              <ArrowRight size={18} />
-            </button>
-          </form>
+      return { usd, pen, count, topProviders, projectSpend };
+    };
 
-          <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '13px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {isRegistering ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta aún?'}
-            </span>{' '}
-            <button 
-              onClick={() => {
-                setIsRegistering(!isRegistering);
-                setAuthError(null);
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--color-primary)',
-                fontWeight: '600',
-                cursor: 'pointer',
-                fontFamily: 'var(--font-sans)',
-                textDecoration: 'underline'
-              }}
-            >
-              {isRegistering ? 'Inicia sesión aquí' : 'Regístrate aquí'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    return {
+      oc: calculateMetrics(ocOrders),
+      os: calculateMetrics(osOrders),
+      totalProviders: new Set(projectFiltered.map(o => o.proveedor)).size,
+      totalCount: projectFiltered.length
+    };
+  }, [allGroupedOrders, selectedProject]);
 
   return (
     <div className="app-container">
-      {/* Sidebar Navigation */}
+      {/* Sidebar */}
       <aside className="sidebar">
         <div>
           <div className="logo-section">
@@ -859,7 +679,10 @@ function App() {
             <li>
               <button 
                 className={`nav-item ${activeTab === 'orders' ? 'active' : ''}`}
-                onClick={() => setActiveTab('orders')}
+                onClick={() => {
+                  setActiveTab('orders');
+                  setSelectedType('all');
+                }}
               >
                 <FileText size={20} />
                 <span>Órdenes</span>
@@ -919,7 +742,7 @@ function App() {
         </div>
       </aside>
 
-      {/* Main Workspace Area */}
+      {/* Main Panel */}
       <main className="main-content">
         
         {/* Header */}
@@ -936,7 +759,21 @@ function App() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            {/* Sync Cloud Badge */}
+            {/* Project Quick Selector for Dashboard */}
+            {activeTab === 'dashboard' && orders.length > 0 && (
+              <select 
+                className="filter-select"
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                style={{ height: '40px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', fontWeight: '600' }}
+              >
+                <option value="all">Filtrar: Todos los Proyectos</option>
+                <option value="LITORAL">LITORAL</option>
+                <option value="SB">SB</option>
+                <option value="SUNNY">SUNNY</option>
+              </select>
+            )}
+
             {isSupabaseConfigured ? (
               <span className="badge" style={{ 
                 backgroundColor: 'rgba(16, 185, 129, 0.1)', 
@@ -961,17 +798,10 @@ function App() {
                 gap: '6px',
                 padding: '6px 12px',
                 borderRadius: '8px'
-              }} title="Configura un archivo .env con credenciales de Supabase para activar la sincronización en la nube.">
+              }}>
                 <Database size={16} />
                 <span style={{ fontWeight: '600', fontSize: '12px' }}>Base de Datos Local (IndexedDB)</span>
               </span>
-            )}
-
-            {orders.length > 0 && activeTab === 'orders' && (
-              <button onClick={exportToCSV} className="btn-primary" id="btn-export-csv">
-                <Download size={18} />
-                <span>Exportar Vista CSV</span>
-              </button>
             )}
           </div>
         </header>
@@ -983,7 +813,7 @@ function App() {
           </div>
         ) : (
           <>
-            {/* View 1: Dashboard */}
+            {/* VIEW 1: Dashboard (Side-by-side analysis for OC and OS) */}
             {activeTab === 'dashboard' && (
               <>
                 {orders.length === 0 ? (
@@ -991,7 +821,7 @@ function App() {
                     <Info size={48} style={{ margin: '0 auto 16px', color: 'var(--color-primary)' }} />
                     <h2 style={{ marginBottom: '8px' }}>No hay información registrada</h2>
                     <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
-                      Carga tus archivos de compras (OC) y servicios (OS) en la pestaña "Cargar Excel" para comenzar.
+                      Carga tu archivo consolidado `DETALLES.xlsx` o archivos de proyectos individuales en la pestaña "Cargar Excel" para comenzar.
                     </p>
                     <button onClick={() => setActiveTab('upload')} className="btn-primary" style={{ margin: '0 auto' }}>
                       <Upload size={18} />
@@ -999,137 +829,178 @@ function App() {
                     </button>
                   </div>
                 ) : (
-                  <>
-                    {/* KPI Widget Cards */}
-                    <section className="metrics-grid">
-                      <div className="metric-card" style={{ '--card-accent-color': 'var(--color-primary)' }}>
-                        <span className="metric-title">Gasto Total (USD)</span>
-                        <span className="metric-value">{formatCurrency(totals.usd, 'USD')}</span>
-                        <span className="metric-sub">Órdenes cargadas en dólares</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
+                    
+                    {/* LEFT COLUMN: Purchase Orders (OC) */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '2px solid var(--color-litoral)', paddingBottom: '8px' }}>
+                        <ShoppingBag size={24} style={{ color: 'var(--color-litoral)' }} />
+                        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                          Órdenes de Compra (OC)
+                        </h2>
                       </div>
-                      
-                      {totals.cop > 0 && (
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-success)' }}>
-                          <span className="metric-title">Gasto Total (COP)</span>
-                          <span className="metric-value">{formatCurrency(totals.cop, 'COP')}</span>
-                          <span className="metric-sub">Pesos Colombianos acumulados</span>
+
+                      {/* OC Metric Cards */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-litoral)', padding: '16px 20px' }}>
+                          <span className="metric-title" style={{ fontSize: '11px' }}>Gasto Acumulado (OC)</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                            <span style={{ fontSize: '20px', fontWeight: '800' }}>{formatCurrency(dashboardStats.oc.pen, 'PEN')}</span>
+                            <span style={{ fontSize: '15px', color: 'var(--text-secondary)', fontWeight: '600' }}>{formatCurrency(dashboardStats.oc.usd, 'USD')}</span>
+                          </div>
                         </div>
-                      )}
 
-                      {totals.pen > 0 && (
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-warning)' }}>
-                          <span className="metric-title">Gasto Total (Soles)</span>
-                          <span className="metric-value">{formatCurrency(totals.pen, 'PEN')}</span>
-                          <span className="metric-sub">Soles Peruanos acumulados</span>
+                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-litoral)', padding: '16px 20px', justifyContent: 'center' }}>
+                          <span className="metric-title" style={{ fontSize: '11px' }}>Cantidad de Órdenes (OC)</span>
+                          <span className="metric-value" style={{ fontSize: '32px', marginTop: '6px' }}>{dashboardStats.oc.count}</span>
                         </div>
-                      )}
-
-                      <div className="metric-card" style={{ '--card-accent-color': '#8b5cf6' }}>
-                        <span className="metric-title">Total de Órdenes</span>
-                        <span className="metric-value">{totals.ordersCount}</span>
-                        <span className="metric-sub">{totals.ocCount} Compra (OC) | {totals.osCount} Servicio (OS)</span>
                       </div>
 
-                      <div className="metric-card" style={{ '--card-accent-color': '#ec4899' }}>
-                        <span className="metric-title">Proveedores</span>
-                        <span className="metric-value">{totals.uniqueSuppliers}</span>
-                        <span className="metric-sub">Proveedores diferentes registrados</span>
-                      </div>
-                    </section>
-
-                    {/* Visual Charts */}
-                    <div className="charts-grid">
-                      
-                      {/* Project Spend Chart */}
+                      {/* OC Top Suppliers */}
                       <div className="chart-card">
                         <div className="chart-header">
-                          <h3 className="chart-title">Distribución de Gasto por Proyecto (Equivalente en USD)</h3>
-                          <Calendar size={18} style={{ color: 'var(--text-muted)' }} />
+                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Top 5 Proveedores (OC)</h3>
+                          <Users size={16} style={{ color: 'var(--text-muted)' }} />
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', flexGrow: 1, justifyContent: 'center' }}>
-                          {Object.entries(totals.projectSpend).map(([proj, spend]) => {
-                            if (spend === 0) return null;
-                            const maxSpend = Math.max(...Object.values(totals.projectSpend));
-                            const pct = maxSpend > 0 ? (spend / maxSpend) * 100 : 0;
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
+                          {dashboardStats.oc.topProviders.length === 0 ? (
+                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>Sin información</p>
+                          ) : (
+                            dashboardStats.oc.topProviders.map((prov, index) => {
+                              const maxVal = Math.max(...dashboardStats.oc.topProviders.map(p => p.val));
+                              const pct = maxVal > 0 ? (prov.val / maxVal) * 100 : 0;
+                              return (
+                                <div key={prov.name} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                                    <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
+                                      {index + 1}. {prov.name}
+                                    </span>
+                                    <span style={{ fontWeight: '700', color: 'var(--text-secondary)' }}>{formatCurrency(prov.val, 'USD')} eq.</span>
+                                  </div>
+                                  <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                                    <div style={{ height: '100%', width: `${pct}%`, backgroundColor: 'var(--color-litoral)', borderRadius: '4px' }}></div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      {/* OC Project Share */}
+                      <div className="chart-card">
+                        <div className="chart-header">
+                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Distribución por Proyecto (OC)</h3>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {Object.entries(dashboardStats.oc.projectSpend).map(([proj, spend]) => {
+                            if (spend === 0 || proj === 'OTHER') return null;
+                            const totalOC = Object.values(dashboardStats.oc.projectSpend).reduce((a,b)=>a+b,0);
+                            const share = totalOC > 0 ? (spend / totalOC) * 100 : 0;
                             return (
-                              <div key={proj} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '600' }}>
-                                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <span style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
-                                    {proj}
-                                  </span>
-                                  <span>{formatCurrency(spend, 'USD')}</span>
-                                </div>
-                                <div style={{ height: '16px', width: '100%', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '9999px', overflow: 'hidden' }}>
-                                  <div style={{ 
-                                    height: '100%', 
-                                    width: `${pct}%`, 
-                                    backgroundColor: getProjectColor(proj),
-                                    borderRadius: '9999px',
-                                    transition: 'width 1s ease-out'
-                                  }}></div>
-                                </div>
+                              <div key={proj} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
+                                  {proj}
+                                </span>
+                                <span style={{ fontWeight: '600' }}>
+                                  {formatCurrency(spend, 'USD')} eq. <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>({share.toFixed(0)}%)</span>
+                                </span>
                               </div>
                             );
                           })}
                         </div>
                       </div>
+                    </div>
 
-                      {/* OC vs OS Pie Chart */}
+                    {/* RIGHT COLUMN: Service Orders (OS) */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '2px solid var(--color-sb)', paddingBottom: '8px' }}>
+                        <Briefcase size={24} style={{ color: 'var(--color-sb)' }} />
+                        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                          Órdenes de Servicio (OS)
+                        </h2>
+                      </div>
+
+                      {/* OS Metric Cards */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-sb)', padding: '16px 20px' }}>
+                          <span className="metric-title" style={{ fontSize: '11px' }}>Gasto Acumulado (OS)</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                            <span style={{ fontSize: '20px', fontWeight: '800' }}>{formatCurrency(dashboardStats.os.pen, 'PEN')}</span>
+                            <span style={{ fontSize: '15px', color: 'var(--text-secondary)', fontWeight: '600' }}>{formatCurrency(dashboardStats.os.usd, 'USD')}</span>
+                          </div>
+                        </div>
+
+                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-sb)', padding: '16px 20px', justifyContent: 'center' }}>
+                          <span className="metric-title" style={{ fontSize: '11px' }}>Cantidad de Órdenes (OS)</span>
+                          <span className="metric-value" style={{ fontSize: '32px', marginTop: '6px' }}>{dashboardStats.os.count}</span>
+                        </div>
+                      </div>
+
+                      {/* OS Top Suppliers */}
                       <div className="chart-card">
                         <div className="chart-header">
-                          <h3 className="chart-title">Proporción de Órdenes</h3>
+                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Top 5 Proveedores (OS)</h3>
+                          <Users size={16} style={{ color: 'var(--text-muted)' }} />
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '24px', flexGrow: 1 }}>
-                          {totals.ordersCount > 0 && (
-                            (() => {
-                              const ocPct = (totals.ocCount / totals.ordersCount) * 100;
-                              const osPct = (totals.osCount / totals.ordersCount) * 100;
-                              const strokeDash = 251.2;
-                              const ocOffset = strokeDash - (strokeDash * ocPct) / 100;
-                              
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
+                          {dashboardStats.os.topProviders.length === 0 ? (
+                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>Sin información</p>
+                          ) : (
+                            dashboardStats.os.topProviders.map((prov, index) => {
+                              const maxVal = Math.max(...dashboardStats.os.topProviders.map(p => p.val));
+                              const pct = maxVal > 0 ? (prov.val / maxVal) * 100 : 0;
                               return (
-                                <>
-                                  <svg width="160" height="160" viewBox="0 0 100 100">
-                                    <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--border-color)" strokeWidth="10" />
-                                    <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--color-sb)" strokeWidth="10" 
-                                      strokeDasharray={strokeDash} strokeDashoffset={0} />
-                                    <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--color-litoral)" strokeWidth="10" 
-                                      strokeDasharray={strokeDash} strokeDashoffset={ocOffset} transform="rotate(-90 50 50)" />
-                                    <text x="50" y="55" textAnchor="middle" fill="var(--text-primary)" fontSize="14" fontWeight="800" fontFamily="var(--font-heading)">
-                                      {totals.ordersCount}
-                                    </text>
-                                  </svg>
-                                  
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ width: '10px', height: '10px', backgroundColor: 'var(--color-litoral)', borderRadius: '2px' }}></span>
-                                        Orden Compra (OC)
-                                      </span>
-                                      <strong>{totals.ocCount} ({ocPct.toFixed(0)}%)</strong>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ width: '10px', height: '10px', backgroundColor: 'var(--color-sb)', borderRadius: '2px' }}></span>
-                                        Orden Servicio (OS)
-                                      </span>
-                                      <strong>{totals.osCount} ({osPct.toFixed(0)}%)</strong>
-                                    </div>
+                                <div key={prov.name} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                                    <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
+                                      {index + 1}. {prov.name}
+                                    </span>
+                                    <span style={{ fontWeight: '700', color: 'var(--text-secondary)' }}>{formatCurrency(prov.val, 'USD')} eq.</span>
                                   </div>
-                                </>
+                                  <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                                    <div style={{ height: '100%', width: `${pct}%`, backgroundColor: 'var(--color-sb)', borderRadius: '4px' }}></div>
+                                  </div>
+                                </div>
                               );
-                            })()
+                            })
                           )}
                         </div>
                       </div>
+
+                      {/* OS Project Share */}
+                      <div className="chart-card">
+                        <div className="chart-header">
+                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Distribución por Proyecto (OS)</h3>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          {Object.entries(dashboardStats.os.projectSpend).map(([proj, spend]) => {
+                            if (spend === 0 || proj === 'OTHER') return null;
+                            const totalOS = Object.values(dashboardStats.os.projectSpend).reduce((a,b)=>a+b,0);
+                            const share = totalOS > 0 ? (spend / totalOS) * 100 : 0;
+                            return (
+                              <div key={proj} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
+                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
+                                  {proj}
+                                </span>
+                                <span style={{ fontWeight: '600' }}>
+                                  {formatCurrency(spend, 'USD')} eq. <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>({share.toFixed(0)}%)</span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                  </>
+
+                  </div>
                 )}
               </>
             )}
 
-            {/* View 2: Orders Table */}
+            {/* VIEW 2: Orders Table */}
             {activeTab === 'orders' && (
               <>
                 {/* Search and Filters */}
@@ -1422,7 +1293,7 @@ function App() {
                     Arrastra tus archivos Excel aquí o <span>selecciónalos desde tu equipo</span>
                   </p>
                   <p className="dropzone-sub">
-                    Soporta múltiples archivos. Los nombres deben iniciar con "OC" para compras o "OS" para servicios.
+                    Soporta archivos individuales o consolidado como `DETALLES.xlsx` (lee pestañas OC/OS automáticamente).
                   </p>
                   <input 
                     type="file" 
