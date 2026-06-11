@@ -70,6 +70,7 @@ function App() {
   // Table Pagination & Expanded Rows
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedOrderId, setExpandedOrderId] = useState(null);
+  const [innerSearch, setInnerSearch] = useState(''); // New: search within expanded order
   const itemsPerPage = 15;
   
   // Search & Filter States
@@ -1026,17 +1027,22 @@ function App() {
 
   const macroSummary = useMemo(() => {
     const macMap = {};
+    const VALID_MACROS = ['1. MATERIALES', '2. SUBCONTRATOS Y SERVICIOS', '3. ACTIVOS'];
+    
     orders.forEach(row => {
       const sp = getSimpleProject(row.proyecto);
       if (logisticProject !== 'all' && sp !== logisticProject) return;
       if (logisticType !== 'all' && row.tipo_orden !== logisticType) return;
       
       const { macro } = classifyResource(row);
+      // Ensure macro is one of the valid ones
+      if (!VALID_MACROS.includes(macro)) return;
+
       if (!macMap[macro]) macMap[macro] = { name: macro, count: 0, totalComprado: 0 };
       macMap[macro].count++;
       macMap[macro].totalComprado += row.parcial_final || 0;
     });
-    return Object.values(macMap).sort((a, b) => b.totalComprado - a.totalComprado);
+    return Object.values(macMap).sort((a, b) => a.name.localeCompare(b.name));
   }, [orders, logisticProject, logisticType]);
 
   // Export to XLSX function
@@ -1454,7 +1460,10 @@ function App() {
                             {formatCurrency(order.total_con_igv, order.moneda)}
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <button onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
+                            <button onClick={() => {
+                              setExpandedOrderId(isExpanded ? null : order.id);
+                              setInnerSearch(''); // Reset search when switching orders
+                            }}
                               className="btn-outline" style={{ padding: '4px 8px', border: 'none' }}>
                               {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                             </button>
@@ -1465,12 +1474,26 @@ function App() {
                         {isExpanded && (
                           <tr className="details-row">
                             <td colSpan="7">
-                              <div className="details-wrapper" style={{ padding: '20px' }}>
+                              <div className="details-wrapper" style={{ padding: '24px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                                   <h4 style={{ fontSize: '15px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                                     Recursos de la Orden {order.nro_orden}
                                   </h4>
-                                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Archivo: {order.archivo_origen}</span>
+                                  
+                                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                    <div className="search-input-wrapper" style={{ minWidth: '240px' }}>
+                                      <Search size={14} className="search-icon" style={{ left: '12px' }} />
+                                      <input 
+                                        type="text" 
+                                        className="search-input" 
+                                        placeholder="Filtrar recursos de esta orden..."
+                                        value={innerSearch}
+                                        onChange={(e) => setInnerSearch(e.target.value)}
+                                        style={{ padding: '8px 12px 8px 32px', fontSize: '12px', height: '32px' }}
+                                      />
+                                    </div>
+                                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Archivo: {order.archivo_origen}</span>
+                                  </div>
                                 </div>
 
                                 <table className="items-table">
@@ -1484,9 +1507,11 @@ function App() {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {order.items.map((item, idx) => (
+                                    {order.items
+                                      .filter(item => String(item.recurso).toLowerCase().includes(innerSearch.toLowerCase()))
+                                      .map((item, idx) => (
                                       <tr key={item.id || idx}>
-                                        <td style={{ fontWeight: '600', padding: '12px' }}>{item.recurso}</td>
+                                        <td style={{ fontWeight: '600', padding: '12px', lineHeight: '1.4', whiteSpace: 'normal' }}>{item.recurso}</td>
                                         <td style={{ textAlign: 'center' }}>{item.unidad}</td>
                                         <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
                                         <td style={{ textAlign: 'right' }}>
