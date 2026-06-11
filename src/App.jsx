@@ -35,10 +35,10 @@ import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 function App() {
   // Navigation & UI States
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('oc');
   const [themeMode, setThemeMode] = useState('dark');
   const [loading, setLoading] = useState(true);
-  
+
   // Data States
   const [orders, setOrders] = useState([]);
   const [filesLog, setFilesLog] = useState([]);
@@ -166,70 +166,193 @@ function App() {
     return isNaN(num) ? 0 : num;
   };
 
-  // Smart fuzzy mapper to normalize Excel column names
+  // Smart mapper to normalize Excel column names without partial match conflicts
   const normalizeRow = (rawRow, fileName, defaultProject, defaultType) => {
     const row = {};
     const cleanKey = (k) => String(k).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
+    let orderNum = '';
+    let compositeOrderNum = '';
+    let providerName = '';
+    let rucValue = '';
+    let dateValue = '';
+    let statusValue = '';
+    let currencyValue = '';
+    let resourceName = '';
+    let qtyValue = 1;
+    let priceSin = 0;
+    let priceCon = 0;
+    let totalVal = 0;
+    let unitValue = 'UND';
+    let gestorValue = 'Sin Asignar';
+    let creatorValue = 'Sistema';
+    let obsValue = '';
+
+    // Nuevos campos
+    let cantAtendidaValue = 0;
+    let cantPorAtenderValue = 0;
+    let estadoFacturacionValue = 'Sin Facturación';
+    let saldoPorPagarValue = 0;
+    let fechaEntregaValue = '';
+    let aprobadorValue = '';
+    let empresaProyectoValue = '';
+    let pedidosValue = '';
+    let anioMesValue = '';
+    let solicitanteValue = '';
+
     Object.keys(rawRow).forEach((key) => {
       const ck = cleanKey(key);
+      const val = rawRow[key];
+
+      // 1. Proveedor / Socio de Negocio (Búsqueda robusta)
+      if (
+        (ck.includes('proveedor') || ck.includes('socio') || ck.includes('negocio') || ck === 'cliente') && 
+        !ck.includes('correo') && !ck.includes('email') && !ck.includes('mail') && !ck.includes('contacto') &&
+        !ck.includes('ruc') && !ck.includes('direccion') && !ck.includes('telefono')
+      ) {
+        if (val && String(val).trim()) {
+          providerName = String(val).trim();
+        }
+      }
       
-      if (ck.includes('proveedor')) {
-        row.proveedor = rawRow[key];
-      } else if (ck.includes('proyecto') && !ck.includes('codigo') && !ck.includes('grupo') && !ck.includes('empresa')) {
-        row.proyecto = rawRow[key];
-      } else if ((ck.includes('orden') && (ck.includes('compra') || ck.includes('servicio'))) || ck.includes('nro. orden') || ck.includes('nº orden')) {
-        row.nro_orden = rawRow[key];
-      } else if (ck.includes('ruc')) {
-        row.ruc = String(rawRow[key]).trim();
-      } else if (ck.includes('fecha') && !ck.includes('creacion') && !ck.includes('entrega') && !ck.includes('vigencia')) {
-        row.fecha = rawRow[key];
-      } else if (ck.includes('estado') && !ck.includes('envio') && !ck.includes('facturacion')) {
-        row.estado = rawRow[key];
-      } else if (ck.includes('moneda')) {
-        row.moneda = rawRow[key];
-      } else if (ck.includes('recurso') && !ck.includes('codigo') && !ck.includes('categoria')) {
-        row.recurso = rawRow[key];
-      } else if (ck.includes('cantidad') && !ck.includes('atendida') && !ck.includes('atender')) {
-        row.cantidad = parseNum(rawRow[key]);
-      } else if (ck.includes('precio sin')) {
-        row.precio_sin_igv = parseNum(rawRow[key]);
-      } else if (ck.includes('precio con')) {
-        row.precio_con_igv = parseNum(rawRow[key]);
-      } else if (ck.includes('parcial con') || ck.includes('parcial final') || ck.includes('valor total')) {
-        row.parcial_final = parseNum(rawRow[key]);
-      } else if (ck.includes('unidad') && !ck.includes('medida')) {
-        row.unidad = rawRow[key];
-      } else if (ck.includes('gestor')) {
-        row.gestor_compra = rawRow[key];
-      } else if (ck.includes('creado por') || ck.includes('usuario')) {
-        row.creado_por = rawRow[key];
-      } else if (ck.includes('observacion')) {
-        row.observacion = rawRow[key];
+      // 2. Número de Orden
+      if (ck.includes('compuesto')) {
+        compositeOrderNum = val;
+      } else if (ck === 'nro. orden de compra' || ck === 'nro. orden de servicio' || 
+                 ck === 'nº orden de compra' || ck === 'nº orden de servicio' || 
+                 ck === 'nro orden' || ck === 'nº orden' || ck === 'nro. orden' || ck === 'nº orden') {
+        orderNum = val;
+      }
+
+      // 3. RUC
+      if (ck === 'ruc' || ck.includes('ruc')) {
+        rucValue = String(val).trim();
+      }
+
+      // 4. Fecha
+      if (ck === 'fecha') {
+        dateValue = val;
+      }
+
+      // 5. Estado
+      if (ck === 'estado') {
+        statusValue = val;
+      }
+
+      // 6. Moneda
+      if (ck === 'moneda') {
+        currencyValue = val;
+      }
+
+      // 7. Recurso / Ítem
+      if (ck === 'recurso') {
+        resourceName = val;
+      }
+
+      // 8. Cantidad
+      if (ck === 'cantidad') {
+        qtyValue = parseNum(val);
+      }
+
+      // 9. Precios
+      if (ck === 'precio sin i.g.v.' || ck === 'precio sin igv') {
+        priceSin = parseNum(val);
+      } else if (ck === 'precio con i.g.v.' || ck === 'precio con igv') {
+        priceCon = parseNum(val);
+      }
+
+      // 10. Parciales / Totales
+      if (ck === 'parcial con i.g.v. detalle' || ck === 'parcial con igv' || 
+          ck === 'parcial final' || ck === 'valor total' || ck === 'total') {
+        totalVal = parseNum(val);
+      }
+
+      // 11. Unidad
+      if (ck === 'unidad') {
+        unitValue = val;
+      }
+
+      // 12. Gestor / Creador / Observación
+      if (ck === 'gestor de compra' || ck === 'gestor compra' || ck === 'gestor') {
+        gestorValue = val;
+      } else if (ck === 'creado por' || ck === 'creador') {
+        creatorValue = val;
+      } else if (ck === 'observacion' || ck === 'observaciones') {
+        obsValue = val;
+      }
+
+      // 13. Nuevos Campos
+      if (ck.includes('cant.atendida') || ck.includes('cantidad atendida') || ck.includes('cant atendida') || ck.includes('cant. atendida')) {
+        cantAtendidaValue = parseNum(val);
+      }
+      if (ck.includes('por atender') || ck.includes('por_atender')) {
+        cantPorAtenderValue = parseNum(val);
+      }
+      if (ck.includes('facturacion') || ck.includes('facturado')) {
+        estadoFacturacionValue = String(val).trim();
+      }
+      if (ck.includes('saldo por pagar') || ck.includes('saldo_por_pagar') || ck.includes('saldo pagar')) {
+        saldoPorPagarValue = parseNum(val);
+      }
+      if (ck.includes('fecha de entrega') || ck.includes('fecha entrega')) {
+        fechaEntregaValue = String(val).trim();
+      }
+      if (ck === 'aprobador' || ck.includes('aprobadores')) {
+        aprobadorValue = String(val).trim();
+      }
+      if (ck.includes('empresa proyecto') || ck.includes('empresa_proyecto') || ck.includes('empresa')) {
+        empresaProyectoValue = String(val).trim();
+      }
+      if (ck === 'pedidos' || ck === 'pedido') {
+        pedidosValue = String(val).trim();
+      }
+      if (ck === 'ano mes' || ck === 'año mes' || ck === 'anomes') {
+        anioMesValue = String(val).trim();
+      }
+      if (ck.includes('solicitante')) {
+        solicitanteValue = String(val).trim();
       }
     });
 
-    // Casing and encodings for currency
-    const m = String(row.moneda || '').toUpperCase().trim();
+    // Resolve order number (prefer composite code like LIT-SAURIS-0191)
+    row.nro_orden = compositeOrderNum || orderNum || 'S/N';
+    row.proyecto = String(rawRow['Proyecto'] || defaultProject).toUpperCase().trim();
+    row.tipo_orden = defaultType;
+    row.proveedor = String(providerName || 'PROVEEDOR DESCONOCIDO').trim();
+    row.ruc = rucValue || 'S/N';
+    row.fecha = dateValue || 'Sin Fecha';
+    row.estado = statusValue || 'Emitido';
+    
+    // Normalize currency
+    const m = String(currencyValue || '').toUpperCase().trim();
     if (m === 'USD' || m === 'DOLARES' || m === 'US$' || m === 'U$') {
       row.moneda = 'USD';
     } else {
-      row.moneda = 'PEN'; // default to Peruvian Soles (S/.)
+      row.moneda = 'PEN';
     }
 
-    // Fallbacks
-    row.proyecto = String(row.proyecto || defaultProject).toUpperCase().trim();
-    row.tipo_orden = defaultType;
-    row.nro_orden = row.nro_orden || 'S/N';
-    row.proveedor = String(row.proveedor || 'PROVEEDOR DESCONOCIDO').trim();
-    row.recurso = row.recurso || 'ÍTEM SIN DESCRIPCIÓN';
-    row.cantidad = row.cantidad || 1;
-    row.parcial_final = row.parcial_final || ((row.precio_con_igv || row.precio_sin_igv || 0) * row.cantidad);
-    row.precio_con_igv = row.precio_con_igv || (row.cantidad ? row.parcial_final / row.cantidad : 0);
-    row.precio_sin_igv = row.precio_sin_igv || row.precio_con_igv / 1.18;
-    row.estado = row.estado || 'Emitido';
-    row.fecha = row.fecha || 'Sin Fecha';
+    row.recurso = resourceName || 'ÍTEM SIN DESCRIPCIÓN';
+    row.cantidad = qtyValue;
+    row.parcial_final = totalVal || (priceCon * qtyValue) || (priceSin * 1.18 * qtyValue) || 0;
+    row.precio_con_igv = priceCon || (qtyValue ? row.parcial_final / qtyValue : 0);
+    row.precio_sin_igv = priceSin || (row.precio_con_igv / 1.18);
+    row.unidad = unitValue;
+    row.gestor_compra = gestorValue;
+    row.creado_por = creatorValue;
+    row.observacion = obsValue;
     row.archivo_origen = fileName;
+
+    // Nuevos campos
+    row.cant_atendida = cantAtendidaValue;
+    row.cant_por_atender = cantPorAtenderValue;
+    row.estado_facturacion = estadoFacturacionValue;
+    row.saldo_por_pagar = saldoPorPagarValue;
+    row.fecha_entrega = fechaEntregaValue;
+    row.aprobador = aprobadorValue;
+    row.empresa_proyecto = empresaProyectoValue;
+    row.pedidos = pedidosValue;
+    row.anio_mes = anioMesValue;
+    row.solicitante = solicitanteValue;
 
     return row;
   };
@@ -541,6 +664,15 @@ function App() {
           gestor_compra: row.gestor_compra || 'Sin Asignar',
           creado_por: row.creado_por || 'Sistema',
           observacion: row.observacion || '',
+          // Nuevos campos en cabecera
+          estado_facturacion: row.estado_facturacion || 'Sin Facturación',
+          saldo_por_pagar: row.saldo_por_pagar || 0,
+          fecha_entrega: row.fecha_entrega || '',
+          aprobador: row.aprobador || '',
+          empresa_proyecto: row.empresa_proyecto || '',
+          pedidos: row.pedidos || '',
+          anio_mes: row.anio_mes || '',
+          solicitante: row.solicitante || '',
           items: []
         };
       }
@@ -555,7 +687,10 @@ function App() {
         unidad: row.unidad || 'UND',
         precio_sin_igv: row.precio_sin_igv,
         precio_con_igv: row.precio_con_igv,
-        total: row.parcial_final
+        total: row.parcial_final,
+        // Nuevos campos a nivel de ítem
+        cant_atendida: row.cant_atendida || 0,
+        cant_por_atender: row.cant_por_atender || 0
       });
     });
 
@@ -877,6 +1012,453 @@ function App() {
     );
   }
 
+  const renderDashboardAndTable = (type) => {
+    // 1. Filtrar las órdenes específicas de este tipo (OC o OS) y del proyecto seleccionado
+    const projectFiltered = allGroupedOrders.filter(o => 
+      o.tipo_orden === type && (selectedProject === 'all' || o.proyecto === selectedProject)
+    );
+
+    // 2. Si no hay datos registrados
+    if (orders.length === 0) {
+      return (
+        <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
+          <Info size={48} style={{ margin: '0 auto 16px', color: 'var(--color-primary)' }} />
+          <h2 style={{ marginBottom: '8px' }}>No hay información registrada</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+            Carga tu archivo consolidado `DETALLES.xlsx` o archivos de proyectos individuales en la pestaña "Cargar Excel" para comenzar.
+          </p>
+          <button onClick={() => setActiveTab('upload')} className="btn-primary" style={{ margin: '0 auto' }}>
+            <Upload size={18} />
+            <span>Ir a Cargar Archivos</span>
+          </button>
+        </div>
+      );
+    }
+
+    // 3. Métricas y datos de gráficos del tipo correspondiente
+    const stats = type === 'OC' ? dashboardStats.oc : dashboardStats.os;
+    const accentColor = type === 'OC' ? 'var(--color-litoral)' : 'var(--color-sb)';
+    const typeLabel = type === 'OC' ? 'Compra (OC)' : 'Servicio (OS)';
+
+    // Aplicar filtros de la barra de búsqueda y estado local
+    const filteredForTable = projectFiltered.filter((order) => {
+      const matchesSearch = 
+        String(order.nro_orden).toLowerCase().includes(searchQuery.toLowerCase()) ||
+        String(order.proveedor).toLowerCase().includes(searchQuery.toLowerCase()) ||
+        String(order.ruc).toLowerCase().includes(searchQuery.toLowerCase()) ||
+        String(order.gestor_compra).toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (order.estado_facturacion && String(order.estado_facturacion).toLowerCase().includes(searchQuery.toLowerCase())) ||
+        order.items.some(item => String(item.recurso).toLowerCase().includes(searchQuery.toLowerCase()));
+
+      const matchesStatus = selectedStatus === 'all' || order.estado === selectedStatus;
+
+      return matchesSearch && matchesStatus;
+    });
+
+    // Paginación
+    const indexOfLast = currentPage * itemsPerPage;
+    const indexOfFirst = indexOfLast - itemsPerPage;
+    const currentOrders = filteredForTable.slice(indexOfFirst, indexOfLast);
+    const totalPages = Math.ceil(filteredForTable.length / itemsPerPage);
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+        
+        {/* DASHBOARD SECTOR */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 2fr', gap: '24px' }}>
+          
+          {/* Card 1: Metrics */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="metric-card" style={{ '--card-accent-color': accentColor, padding: '16px 20px', flex: 1 }}>
+              <span className="metric-title" style={{ fontSize: '11px' }}>Gasto Acumulado ({type})</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                <span style={{ fontSize: '20px', fontWeight: '800' }}>{formatCurrency(stats.pen, 'PEN')}</span>
+                <span style={{ fontSize: '15px', color: 'var(--text-secondary)', fontWeight: '600' }}>{formatCurrency(stats.usd, 'USD')}</span>
+              </div>
+            </div>
+
+            <div className="metric-card" style={{ '--card-accent-color': accentColor, padding: '16px 20px', flex: 1, justifyContent: 'center' }}>
+              <span className="metric-title" style={{ fontSize: '11px' }}>Cantidad de Órdenes ({type})</span>
+              <span className="metric-value" style={{ fontSize: '32px', marginTop: '6px' }}>{stats.count}</span>
+            </div>
+          </div>
+
+          {/* Card 2: Top Suppliers Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3 className="chart-title" style={{ fontSize: '15px' }}>Top 5 {type === 'OC' ? 'Proveedores' : 'Socios de Negocio'} ({type})</h3>
+              <Users size={16} style={{ color: 'var(--text-muted)' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px' }}>
+              {stats.topProviders.length === 0 ? (
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', margin: '20px 0' }}>Sin información</p>
+              ) : (
+                stats.topProviders.map((prov, index) => {
+                  const maxVal = Math.max(...stats.topProviders.map(p => p.val));
+                  const pct = maxVal > 0 ? (prov.val / maxVal) * 100 : 0;
+                  return (
+                    <div key={prov.name} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                        <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
+                          {index + 1}. {prov.name}
+                        </span>
+                        <span style={{ fontWeight: '700', color: 'var(--text-secondary)' }}>{formatCurrency(prov.val, 'USD')} eq.</span>
+                      </div>
+                      <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, backgroundColor: accentColor, borderRadius: '4px' }}></div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Card 3: Project Share Chart */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <h3 className="chart-title" style={{ fontSize: '15px' }}>Distribución por Proyecto ({type})</h3>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '8px', justifyContent: 'center' }}>
+              {Object.entries(stats.projectSpend).every(([_, v]) => v === 0) ? (
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center', margin: '20px 0' }}>Sin información</p>
+              ) : (
+                Object.entries(stats.projectSpend).map(([proj, spend]) => {
+                  if (spend === 0 || proj === 'OTHER') return null;
+                  const totalSpend = Object.values(stats.projectSpend).reduce((a,b)=>a+b,0);
+                  const share = totalSpend > 0 ? (spend / totalSpend) * 100 : 0;
+                  return (
+                    <div key={proj} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
+                        {proj}
+                      </span>
+                      <span style={{ fontWeight: '600' }}>
+                        {formatCurrency(spend, 'USD')} eq. <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>({share.toFixed(0)}%)</span>
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {/* LIST & FILTER SECTOR */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+            <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: '700', margin: 0 }}>
+              Listado de Órdenes de {typeLabel}
+            </h3>
+            <button 
+              onClick={() => {
+                let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+                csvContent += "Nro Orden,Proyecto,Proveedor,RUC,Fecha,Estado,Estado Facturacion,Moneda,Total con IGV,Saldo Por Pagar,Gestor,Creado Por\n";
+                filteredForTable.forEach((o) => {
+                  csvContent += [
+                    o.nro_orden,
+                    o.proyecto,
+                    `"${o.proveedor.replace(/"/g, '""')}"`,
+                    o.ruc || 'S/N',
+                    o.fecha,
+                    o.estado,
+                    o.estado_facturacion || '',
+                    o.moneda,
+                    o.total_con_igv.toFixed(2),
+                    o.saldo_por_pagar.toFixed(2),
+                    `"${o.gestor_compra.replace(/"/g, '""')}"`,
+                    `"${o.creado_por.replace(/"/g, '""')}"`
+                  ].join(",") + "\n";
+                });
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `reporte_ordenes_${type}_${selectedProject}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}
+              className="btn-primary" 
+              style={{ fontSize: '12px', padding: '8px 14px', borderRadius: '8px' }}
+            >
+              <Download size={14} />
+              <span>Exportar CSV</span>
+            </button>
+          </div>
+
+          <section className="filter-bar" style={{ marginBottom: '20px' }}>
+            <div className="search-input-wrapper">
+              <Search className="search-icon" size={18} />
+              <input 
+                type="text" 
+                className="search-input" 
+                placeholder={`Buscar por orden, ${type === 'OC' ? 'proveedor' : 'socio de negocio'}, RUC, gestor, estado facturación o ítem...`}
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+              />
+            </div>
+
+            <div className="filter-options">
+              <select 
+                className="filter-select"
+                value={selectedStatus}
+                onChange={(e) => {
+                  setSelectedStatus(e.target.value);
+                  setCurrentPage(1);
+                }}
+              >
+                <option value="all">Todos los Estados de Orden</option>
+                {['all', ...new Set(projectFiltered.map(o => o.estado).filter(Boolean))].filter(s => s !== 'all').map(status => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+
+              <select 
+                className="filter-select"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'all') {
+                    setSearchQuery('');
+                  } else {
+                    setSearchQuery(val);
+                  }
+                  setCurrentPage(1);
+                }}
+              >
+                <option value="all">Todos los Estados de Facturación</option>
+                {['all', ...new Set(projectFiltered.map(o => o.estado_facturacion).filter(Boolean))].filter(s => s !== 'all').map(est => (
+                  <option key={est} value={est}>{est}</option>
+                ))}
+              </select>
+            </div>
+          </section>
+
+          {filteredForTable.length === 0 ? (
+            <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
+              <AlertTriangle size={48} style={{ margin: '0 auto 16px', color: 'var(--color-warning)' }} />
+              <h2>No se encontraron resultados</h2>
+              <p style={{ color: 'var(--text-secondary)' }}>
+                Prueba a ajustar tus filtros o ingresa otra palabra clave en el buscador.
+              </p>
+            </div>
+          ) : (
+            <div className="table-container">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Nro Orden</th>
+                    <th>Proyecto</th>
+                    <th>Empresa</th>
+                    <th>{type === 'OC' ? 'Proveedor' : 'Socio de Negocio'}</th>
+                    <th>Fecha</th>
+                    <th>Estado</th>
+                    <th>Facturación</th>
+                    <th style={{ textAlign: 'right' }}>Saldo por Pagar</th>
+                    <th style={{ textAlign: 'right' }}>Monto Total</th>
+                    <th style={{ textAlign: 'center' }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentOrders.map((order) => {
+                    const isExpanded = expandedOrderId === order.id;
+                    const projectBadgeClass = `badge badge-${order.proyecto.toLowerCase()}`;
+                    
+                    let statusClass = 'status-pendiente';
+                    if (order.estado.toLowerCase().includes('aprob') || order.estado.toLowerCase().includes('emit') || order.estado.toLowerCase().includes('fact')) {
+                      statusClass = 'status-aprobado';
+                    } else if (order.estado.toLowerCase().includes('anul') || order.estado.toLowerCase().includes('canc')) {
+                      statusClass = 'status-anulado';
+                    }
+
+                    let factClass = 'status-pendiente';
+                    if (order.estado_facturacion?.toLowerCase().includes('total')) {
+                      factClass = 'status-aprobado';
+                    } else if (order.estado_facturacion?.toLowerCase().includes('parcial')) {
+                      factClass = 'status-pendiente';
+                    } else if (order.estado_facturacion?.toLowerCase().includes('sin') || order.estado_facturacion?.toLowerCase().includes('no')) {
+                      factClass = 'status-anulado';
+                    }
+
+                    return (
+                      <React.Fragment key={order.id}>
+                        <tr className={isExpanded ? 'expanded' : ''}>
+                          <td><strong>{order.nro_orden}</strong></td>
+                          <td>
+                            <span className={projectBadgeClass}>{order.proyecto}</span>
+                          </td>
+                          <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                            {order.empresa_proyecto || 'S/N'}
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: '500' }}>{order.proveedor}</div>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>RUC: {order.ruc}</span>
+                          </td>
+                          <td>{order.fecha}</td>
+                          <td>
+                            <span className={`badge ${statusClass}`} style={{ borderRadius: '4px' }}>
+                              {order.estado}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`badge ${factClass}`} style={{ borderRadius: '4px', fontSize: '11px' }}>
+                              {order.estado_facturacion || 'Sin Facturación'}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right', color: order.saldo_por_pagar > 0 ? 'var(--color-danger)' : 'var(--text-secondary)', fontWeight: '500' }}>
+                            {formatCurrency(order.saldo_por_pagar, order.moneda)}
+                          </td>
+                          <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
+                            {formatCurrency(order.total_con_igv, order.moneda)}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button 
+                              onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
+                              style={{ 
+                                background: 'none', 
+                                border: 'none', 
+                                color: 'var(--color-primary)', 
+                                cursor: 'pointer',
+                                padding: '4px',
+                                display: 'inline-flex',
+                                alignItems: 'center'
+                              }}
+                            >
+                              {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                            </button>
+                          </td>
+                        </tr>
+
+                        {/* Expanded Row */}
+                        {isExpanded && (
+                          <tr className="details-row">
+                            <td colSpan="10">
+                              <div className="details-wrapper">
+                                <div className="details-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '15px', fontWeight: '700' }}>Detalle Técnico de la Orden {order.nro_orden}</span>
+                                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                    Origen: <code>{order.archivo_origen}</code>
+                                  </span>
+                                </div>
+
+                                <div className="details-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', margin: '16px 0', padding: '16px', backgroundColor: 'rgba(255,255,255,0.01)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Proveedor / RUC</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.proveedor} ({order.ruc || 'S/N'})</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Gestor de Compra</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.gestor_compra}</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Solicitante / Creado Por</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.solicitante || 'Sin Asignar'} / {order.creado_por}</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Empresa del Proyecto</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.empresa_proyecto || 'S/N'}</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Pedidos Asociados</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.pedidos || 'Ninguno'}</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Fecha de Entrega / Periodo</span>
+                                    <span className="details-val" style={{ fontSize: '13px', fontWeight: '600' }}>{order.fecha_entrega || 'No Definida'} ({order.anio_mes || 'S/N'})</span>
+                                  </div>
+                                  <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px', gridColumn: 'span 3' }}>
+                                    <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Aprobadores del Sistema</span>
+                                    <span className="details-val" style={{ fontSize: '12px', fontWeight: '500', color: 'var(--text-secondary)', lineHeight: '1.4' }}>{order.aprobador || 'Sin Aprobadores Registrados'}</span>
+                                  </div>
+                                  {order.observacion && (
+                                    <div className="details-field" style={{ display: 'flex', flexDirection: 'column', gap: '4px', gridColumn: 'span 3' }}>
+                                      <span className="details-label" style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Observaciones</span>
+                                      <span className="details-val" style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{order.observacion}</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                                  Ítems del Detalle
+                                </h4>
+
+                                <table className="items-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Descripción Recurso</th>
+                                      <th style={{ textAlign: 'center' }}>Unidad</th>
+                                      <th style={{ textAlign: 'right' }}>Cant. Total</th>
+                                      <th style={{ textAlign: 'right' }}>Cant. Atendida ({type === 'OC' ? 'Almacén' : 'Subcontrato'})</th>
+                                      <th style={{ textAlign: 'right' }}>Cant. Por Atender</th>
+                                      <th style={{ textAlign: 'right' }}>Precio Unit. c/IGV</th>
+                                      <th style={{ textAlign: 'right' }}>Total</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {order.items.map((item) => (
+                                      <tr key={item.id}>
+                                        <td>{item.recurso}</td>
+                                        <td style={{ textAlign: 'center' }}>{item.unidad}</td>
+                                        <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
+                                        <td style={{ textAlign: 'right', color: item.cant_atendida > 0 ? 'var(--color-success)' : 'inherit' }}>
+                                          {item.cant_atendida.toLocaleString()}
+                                        </td>
+                                        <td style={{ textAlign: 'right', color: item.cant_por_atender > 0 ? 'var(--color-warning)' : 'inherit' }}>
+                                          {item.cant_por_atender.toLocaleString()}
+                                        </td>
+                                        <td style={{ textAlign: 'right' }}>{formatCurrency(item.precio_con_igv, order.moneda)}</td>
+                                        <td style={{ textAlign: 'right', fontWeight: '600' }}>{formatCurrency(item.total, order.moneda)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="pagination" style={{ marginTop: '16px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                Mostrando {indexOfFirst + 1} - {Math.min(indexOfLast, filteredForTable.length)} de {filteredForTable.length} órdenes
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  onClick={() => paginate(currentPage - 1)} 
+                  disabled={currentPage === 1}
+                  className="pagination-btn"
+                >
+                  Anterior
+                </button>
+                <span style={{ alignSelf: 'center', fontSize: '13px', color: 'var(--text-primary)', fontWeight: '600', padding: '0 8px' }}>
+                  Página {currentPage} de {totalPages}
+                </span>
+                <button 
+                  onClick={() => paginate(currentPage + 1)} 
+                  disabled={currentPage === totalPages}
+                  className="pagination-btn"
+                >
+                  Siguiente
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="app-container">
       {/* Sidebar */}
@@ -892,23 +1474,28 @@ function App() {
           <ul className="nav-links">
             <li>
               <button 
-                className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-                onClick={() => setActiveTab('dashboard')}
+                className={`nav-item ${activeTab === 'oc' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('oc');
+                  setSelectedType('OC');
+                  setCurrentPage(1);
+                }}
               >
-                <TrendingUp size={20} />
-                <span>Dashboard</span>
+                <ShoppingBag size={20} />
+                <span>Ecosistema OC</span>
               </button>
             </li>
             <li>
               <button 
-                className={`nav-item ${activeTab === 'orders' ? 'active' : ''}`}
+                className={`nav-item ${activeTab === 'os' ? 'active' : ''}`}
                 onClick={() => {
-                  setActiveTab('orders');
-                  setSelectedType('all');
+                  setActiveTab('os');
+                  setSelectedType('OS');
+                  setCurrentPage(1);
                 }}
               >
-                <FileText size={20} />
-                <span>Órdenes</span>
+                <Briefcase size={20} />
+                <span>Ecosistema OS</span>
               </button>
             </li>
             <li>
@@ -972,8 +1559,8 @@ function App() {
         <header className="page-header">
           <div>
             <h1 className="header-title" id="main-heading">
-              {activeTab === 'dashboard' && 'Dashboard Consolidado'}
-              {activeTab === 'orders' && 'Listado de Órdenes'}
+              {activeTab === 'oc' && 'Ecosistema de Órdenes de Compra (OC)'}
+              {activeTab === 'os' && 'Ecosistema de Órdenes de Servicio (OS)'}
               {activeTab === 'upload' && 'Importación de Archivos'}
             </h1>
             <p className="header-meta">
@@ -983,11 +1570,14 @@ function App() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             {/* Project Quick Selector for Dashboard */}
-            {activeTab === 'dashboard' && orders.length > 0 && (
+            {(activeTab === 'oc' || activeTab === 'os') && orders.length > 0 && (
               <select 
                 className="filter-select"
                 value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
+                onChange={(e) => {
+                  setSelectedProject(e.target.value);
+                  setCurrentPage(1);
+                }}
                 style={{ height: '40px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', fontWeight: '600' }}
               >
                 <option value="all">Filtrar: Todos los Proyectos</option>
@@ -1036,435 +1626,8 @@ function App() {
           </div>
         ) : (
           <>
-            {/* VIEW 1: Dashboard (Side-by-side analysis for OC and OS) */}
-            {activeTab === 'dashboard' && (
-              <>
-                {orders.length === 0 ? (
-                  <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
-                    <Info size={48} style={{ margin: '0 auto 16px', color: 'var(--color-primary)' }} />
-                    <h2 style={{ marginBottom: '8px' }}>No hay información registrada</h2>
-                    <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
-                      Carga tu archivo consolidado `DETALLES.xlsx` o archivos de proyectos individuales en la pestaña "Cargar Excel" para comenzar.
-                    </p>
-                    <button onClick={() => setActiveTab('upload')} className="btn-primary" style={{ margin: '0 auto' }}>
-                      <Upload size={18} />
-                      <span>Ir a Cargar Archivos</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
-                    
-                    {/* LEFT COLUMN: Purchase Orders (OC) */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '2px solid var(--color-litoral)', paddingBottom: '8px' }}>
-                        <ShoppingBag size={24} style={{ color: 'var(--color-litoral)' }} />
-                        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                          Órdenes de Compra (OC)
-                        </h2>
-                      </div>
-
-                      {/* OC Metric Cards */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-litoral)', padding: '16px 20px' }}>
-                          <span className="metric-title" style={{ fontSize: '11px' }}>Gasto Acumulado (OC)</span>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
-                            <span style={{ fontSize: '20px', fontWeight: '800' }}>{formatCurrency(dashboardStats.oc.pen, 'PEN')}</span>
-                            <span style={{ fontSize: '15px', color: 'var(--text-secondary)', fontWeight: '600' }}>{formatCurrency(dashboardStats.oc.usd, 'USD')}</span>
-                          </div>
-                        </div>
-
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-litoral)', padding: '16px 20px', justifyContent: 'center' }}>
-                          <span className="metric-title" style={{ fontSize: '11px' }}>Cantidad de Órdenes (OC)</span>
-                          <span className="metric-value" style={{ fontSize: '32px', marginTop: '6px' }}>{dashboardStats.oc.count}</span>
-                        </div>
-                      </div>
-
-                      {/* OC Top Suppliers */}
-                      <div className="chart-card">
-                        <div className="chart-header">
-                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Top 5 Proveedores (OC)</h3>
-                          <Users size={16} style={{ color: 'var(--text-muted)' }} />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
-                          {dashboardStats.oc.topProviders.length === 0 ? (
-                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>Sin información</p>
-                          ) : (
-                            dashboardStats.oc.topProviders.map((prov, index) => {
-                              const maxVal = Math.max(...dashboardStats.oc.topProviders.map(p => p.val));
-                              const pct = maxVal > 0 ? (prov.val / maxVal) * 100 : 0;
-                              return (
-                                <div key={prov.name} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                                    <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
-                                      {index + 1}. {prov.name}
-                                    </span>
-                                    <span style={{ fontWeight: '700', color: 'var(--text-secondary)' }}>{formatCurrency(prov.val, 'USD')} eq.</span>
-                                  </div>
-                                  <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
-                                    <div style={{ height: '100%', width: `${pct}%`, backgroundColor: 'var(--color-litoral)', borderRadius: '4px' }}></div>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-
-                      {/* OC Project Share */}
-                      <div className="chart-card">
-                        <div className="chart-header">
-                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Distribución por Proyecto (OC)</h3>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          {Object.entries(dashboardStats.oc.projectSpend).map(([proj, spend]) => {
-                            if (spend === 0 || proj === 'OTHER') return null;
-                            const totalOC = Object.values(dashboardStats.oc.projectSpend).reduce((a,b)=>a+b,0);
-                            const share = totalOC > 0 ? (spend / totalOC) * 100 : 0;
-                            return (
-                              <div key={proj} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
-                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
-                                  {proj}
-                                </span>
-                                <span style={{ fontWeight: '600' }}>
-                                  {formatCurrency(spend, 'USD')} eq. <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>({share.toFixed(0)}%)</span>
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* RIGHT COLUMN: Service Orders (OS) */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '2px solid var(--color-sb)', paddingBottom: '8px' }}>
-                        <Briefcase size={24} style={{ color: 'var(--color-sb)' }} />
-                        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: '700', color: 'var(--text-primary)' }}>
-                          Órdenes de Servicio (OS)
-                        </h2>
-                      </div>
-
-                      {/* OS Metric Cards */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-sb)', padding: '16px 20px' }}>
-                          <span className="metric-title" style={{ fontSize: '11px' }}>Gasto Acumulado (OS)</span>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
-                            <span style={{ fontSize: '20px', fontWeight: '800' }}>{formatCurrency(dashboardStats.os.pen, 'PEN')}</span>
-                            <span style={{ fontSize: '15px', color: 'var(--text-secondary)', fontWeight: '600' }}>{formatCurrency(dashboardStats.os.usd, 'USD')}</span>
-                          </div>
-                        </div>
-
-                        <div className="metric-card" style={{ '--card-accent-color': 'var(--color-sb)', padding: '16px 20px', justifyContent: 'center' }}>
-                          <span className="metric-title" style={{ fontSize: '11px' }}>Cantidad de Órdenes (OS)</span>
-                          <span className="metric-value" style={{ fontSize: '32px', marginTop: '6px' }}>{dashboardStats.os.count}</span>
-                        </div>
-                      </div>
-
-                      {/* OS Top Suppliers */}
-                      <div className="chart-card">
-                        <div className="chart-header">
-                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Top 5 Proveedores (OS)</h3>
-                          <Users size={16} style={{ color: 'var(--text-muted)' }} />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '8px' }}>
-                          {dashboardStats.os.topProviders.length === 0 ? (
-                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>Sin información</p>
-                          ) : (
-                            dashboardStats.os.topProviders.map((prov, index) => {
-                              const maxVal = Math.max(...dashboardStats.os.topProviders.map(p => p.val));
-                              const pct = maxVal > 0 ? (prov.val / maxVal) * 100 : 0;
-                              return (
-                                <div key={prov.name} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                                    <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
-                                      {index + 1}. {prov.name}
-                                    </span>
-                                    <span style={{ fontWeight: '700', color: 'var(--text-secondary)' }}>{formatCurrency(prov.val, 'USD')} eq.</span>
-                                  </div>
-                                  <div style={{ height: '8px', width: '100%', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
-                                    <div style={{ height: '100%', width: `${pct}%`, backgroundColor: 'var(--color-sb)', borderRadius: '4px' }}></div>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-
-                      {/* OS Project Share */}
-                      <div className="chart-card">
-                        <div className="chart-header">
-                          <h3 className="chart-title" style={{ fontSize: '15px' }}>Distribución por Proyecto (OS)</h3>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          {Object.entries(dashboardStats.os.projectSpend).map(([proj, spend]) => {
-                            if (spend === 0 || proj === 'OTHER') return null;
-                            const totalOS = Object.values(dashboardStats.os.projectSpend).reduce((a,b)=>a+b,0);
-                            const share = totalOS > 0 ? (spend / totalOS) * 100 : 0;
-                            return (
-                              <div key={proj} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
-                                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: getProjectColor(proj) }}></span>
-                                  {proj}
-                                </span>
-                                <span style={{ fontWeight: '600' }}>
-                                  {formatCurrency(spend, 'USD')} eq. <span style={{ color: 'var(--text-muted)', fontSize: '11px', marginLeft: '6px' }}>({share.toFixed(0)}%)</span>
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* VIEW 2: Orders Table */}
-            {activeTab === 'orders' && (
-              <>
-                {/* Search and Filters */}
-                <section className="filter-bar">
-                  <div className="search-input-wrapper">
-                    <Search className="search-icon" size={18} />
-                    <input 
-                      type="text" 
-                      className="search-input" 
-                      placeholder="Buscar por orden, proveedor, RUC, gestor, recurso..." 
-                      value={searchQuery}
-                      onChange={(e) => {
-                        setSearchQuery(e.target.value);
-                        setCurrentPage(1);
-                      }}
-                      id="search-orders"
-                    />
-                  </div>
-
-                  <div className="filter-options">
-                    <select 
-                      className="filter-select"
-                      value={selectedProject}
-                      onChange={(e) => {
-                        setSelectedProject(e.target.value);
-                        setCurrentPage(1);
-                      }}
-                      id="filter-project"
-                    >
-                      <option value="all">Todos los Proyectos</option>
-                      <option value="LITORAL">LITORAL</option>
-                      <option value="SB">SB</option>
-                      <option value="SUNNY">SUNNY</option>
-                    </select>
-
-                    <select 
-                      className="filter-select"
-                      value={selectedType}
-                      onChange={(e) => {
-                        setSelectedType(e.target.value);
-                        setCurrentPage(1);
-                      }}
-                      id="filter-type"
-                    >
-                      <option value="all">Todos los Tipos</option>
-                      <option value="OC">Órdenes de Compra (OC)</option>
-                      <option value="OS">Órdenes de Servicio (OS)</option>
-                    </select>
-
-                    <select 
-                      className="filter-select"
-                      value={selectedStatus}
-                      onChange={(e) => {
-                        setSelectedStatus(e.target.value);
-                        setCurrentPage(1);
-                      }}
-                      id="filter-status"
-                    >
-                      <option value="all">Todos los Estados</option>
-                      {statuses.filter(s => s !== 'all').map(status => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                  </div>
-                </section>
-
-                {/* Table */}
-                {filteredOrders.length === 0 ? (
-                  <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
-                    <AlertTriangle size={48} style={{ margin: '0 auto 16px', color: 'var(--color-warning)' }} />
-                    <h2>No se encontraron resultados</h2>
-                    <p style={{ color: 'var(--text-secondary)' }}>
-                      Prueba a ajustar tus filtros o ingresa otra palabra clave.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="table-container">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Nro Orden</th>
-                          <th>Proyecto</th>
-                          <th>Tipo</th>
-                          <th>Proveedor</th>
-                          <th>Fecha</th>
-                          <th>Estado</th>
-                          <th style={{ textAlign: 'right' }}>Monto Total</th>
-                          <th style={{ textAlign: 'center' }}>Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentItems.map((order) => {
-                          const isExpanded = expandedOrderId === order.id;
-                          const projectBadgeClass = `badge badge-${order.proyecto.toLowerCase()}`;
-                          const typeBadgeClass = `badge badge-${order.tipo_orden.toLowerCase()}`;
-                          
-                          let statusClass = 'status-pendiente';
-                          if (order.estado.toLowerCase().includes('aprob') || order.estado.toLowerCase().includes('emit') || order.estado.toLowerCase().includes('fact')) {
-                            statusClass = 'status-aprobado';
-                          } else if (order.estado.toLowerCase().includes('anul') || order.estado.toLowerCase().includes('canc')) {
-                            statusClass = 'status-anulado';
-                          }
-
-                          return (
-                            <React.Fragment key={order.id}>
-                              <tr className={isExpanded ? 'expanded' : ''}>
-                                <td><strong>{order.nro_orden}</strong></td>
-                                <td>
-                                  <span className={projectBadgeClass}>{order.proyecto}</span>
-                                </td>
-                                <td>
-                                  <span className={typeBadgeClass}>{order.tipo_orden}</span>
-                                </td>
-                                <td>{order.proveedor}</td>
-                                <td>{order.fecha}</td>
-                                <td>
-                                  <span className={`badge ${statusClass}`} style={{ borderRadius: '4px' }}>
-                                    {order.estado}
-                                  </span>
-                                </td>
-                                <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
-                                  {formatCurrency(order.total_con_igv, order.moneda)}
-                                </td>
-                                <td style={{ textAlign: 'center' }}>
-                                  <button 
-                                    onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
-                                    style={{ 
-                                      background: 'none', 
-                                      border: 'none', 
-                                      color: 'var(--color-primary)', 
-                                      cursor: 'pointer',
-                                      padding: '4px',
-                                      display: 'inline-flex',
-                                      alignItems: 'center'
-                                    }}
-                                  >
-                                    {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                                  </button>
-                                </td>
-                              </tr>
-
-                              {/* Expanded Row */}
-                              {isExpanded && (
-                                <tr className="details-row">
-                                  <td colSpan="8">
-                                    <div className="details-wrapper">
-                                      <div className="details-title">
-                                        <span>Detalles de la Orden {order.nro_orden}</span>
-                                        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                                          Origen: <code>{order.archivo_origen}</code>
-                                        </span>
-                                      </div>
-
-                                      <div className="details-grid">
-                                        <div className="details-field">
-                                          <span className="details-label">Proveedor / RUC</span>
-                                          <span className="details-val">{order.proveedor} ({order.ruc || 'S/N'})</span>
-                                        </div>
-                                        <div className="details-field">
-                                          <span className="details-label">Gestor de Compra</span>
-                                          <span className="details-val">{order.gestor_compra}</span>
-                                        </div>
-                                        <div className="details-field">
-                                          <span className="details-label">Creado Por</span>
-                                          <span className="details-val">{order.creado_por}</span>
-                                        </div>
-                                        {order.observacion && (
-                                          <div className="details-field">
-                                            <span className="details-label">Observaciones</span>
-                                            <span className="details-val">{order.observacion}</span>
-                                          </div>
-                                        )}
-                                      </div>
-
-                                      <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>
-                                        Recursos / Ítems
-                                      </h4>
-
-                                      <table className="items-table">
-                                        <thead>
-                                          <tr>
-                                            <th>Descripción Recurso</th>
-                                            <th style={{ textAlign: 'center' }}>Unidad</th>
-                                            <th style={{ textAlign: 'right' }}>Cantidad</th>
-                                            <th style={{ textAlign: 'right' }}>Precio Unit. c/IGV</th>
-                                            <th style={{ textAlign: 'right' }}>Total</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {order.items.map((item) => (
-                                            <tr key={item.id}>
-                                              <td>{item.recurso}</td>
-                                              <td style={{ textAlign: 'center' }}>{item.unidad}</td>
-                                              <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
-                                              <td style={{ textAlign: 'right' }}>{formatCurrency(item.precio_con_igv, order.moneda)}</td>
-                                              <td style={{ textAlign: 'right', fontWeight: '600' }}>{formatCurrency(item.total, order.moneda)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-
-                    {/* Pagination */}
-                    {totalPages > 1 && (
-                      <div className="pagination">
-                        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                          Mostrando {indexOfFirstItem + 1} - {Math.min(indexOfLastItem, filteredOrders.length)} de {filteredOrders.length} órdenes
-                        </span>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button 
-                            onClick={() => paginate(currentPage - 1)} 
-                            disabled={currentPage === 1}
-                            className="pagination-btn"
-                          >
-                            Anterior
-                          </button>
-                          <span style={{ alignSelf: 'center', fontSize: '13px', color: 'var(--text-primary)', fontWeight: '600', padding: '0 8px' }}>
-                            Página {currentPage} de {totalPages}
-                          </span>
-                          <button 
-                            onClick={() => paginate(currentPage + 1)} 
-                            disabled={currentPage === totalPages}
-                            className="pagination-btn"
-                          >
-                            Siguiente
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
+            {activeTab === 'oc' && renderDashboardAndTable('OC')}
+            {activeTab === 'os' && renderDashboardAndTable('OS')}
 
             {/* View 3: Upload Excel Manager */}
             {activeTab === 'upload' && (

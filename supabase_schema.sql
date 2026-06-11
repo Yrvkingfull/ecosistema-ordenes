@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS public.order_details (
     creado_por TEXT,
     observacion TEXT,
     archivo_origen TEXT,
+    
+    -- Nuevos campos para separar OCs y OSs
+    cant_atendida NUMERIC DEFAULT 0,
+    cant_por_atender NUMERIC DEFAULT 0,
+    estado_facturacion TEXT,
+    saldo_por_pagar NUMERIC DEFAULT 0,
+    fecha_entrega TEXT,
+    aprobador TEXT,
+    empresa_proyecto TEXT,
+    pedidos TEXT,
+    anio_mes TEXT,
+    solicitante TEXT,
+
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     user_id UUID REFERENCES auth.users(id) -- ID del usuario que subió el registro
 );
@@ -27,6 +40,7 @@ CREATE TABLE IF NOT EXISTS public.order_details (
 CREATE INDEX IF NOT EXISTS idx_order_details_nro_orden ON public.order_details(nro_orden);
 CREATE INDEX IF NOT EXISTS idx_order_details_proyecto ON public.order_details(proyecto);
 CREATE INDEX IF NOT EXISTS idx_order_details_proveedor ON public.order_details(proveedor);
+CREATE INDEX IF NOT EXISTS idx_order_details_tipo ON public.order_details(tipo_orden);
 
 -- 3. Habilitar la seguridad a nivel de fila (Row Level Security - RLS)
 ALTER TABLE public.order_details ENABLE ROW LEVEL SECURITY;
