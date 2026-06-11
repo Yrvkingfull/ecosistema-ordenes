@@ -1,38 +1,39 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import * as XLSX from 'xlsx';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart2, 
-  FileText, 
-  Upload, 
-  Search, 
-  TrendingUp, 
   ShoppingBag, 
   Briefcase, 
-  Users, 
-  Trash2, 
+  Package, 
+  Upload, 
+  Database, 
+  Shield, 
+  User, 
+  LogOut, 
+  Sun, 
+  Moon, 
+  Search, 
+  Filter, 
   ChevronDown, 
   ChevronUp, 
-  Sun, 
-  Moon,
-  CheckCircle,
-  Clock,
-  AlertTriangle,
-  Download,
+  Download, 
+  FileText, 
+  CheckCircle, 
+  AlertTriangle, 
   Info,
-  Calendar,
-  Lock,
-  Mail,
-  User,
-  LogOut,
-  Cloud,
-  Database,
-  ArrowRight,
-  TrendingDown,
-  Package,
-  DollarSign,
+  TrendingUp,
   Activity,
-  Shield
+  ArrowRight,
+  Mail,
+  Lock,
+  Trash2,
+  Cloud
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { initDB, saveOrdersLocal, getOrdersLocal, clearLocalDB } from './db';
+import './App.css';
+
+// Chart components from Recharts
 import { 
   BarChart, 
   Bar, 
@@ -42,22 +43,19 @@ import {
   Tooltip, 
   ResponsiveContainer, 
   Cell,
-  PieChart,
+  PieChart, 
   Pie,
   Legend
 } from 'recharts';
-import { getOrders, saveOrders, getFilesLog, saveFilesLog, clearAllDB } from './db';
-import { supabase, isSupabaseConfigured } from './supabaseClient';
-
-// Superadmin emails - only these can upload/delete
-const SUPERADMIN_EMAILS = ['yleon@padovasac.com', 'yrvingleon@hotmail.com'];
-
-function isSuperAdmin(email) {
-  return email && SUPERADMIN_EMAILS.includes(email.toLowerCase().trim());
-}
 
 function App() {
-  // Navigation & UI States
+  const [session, setSession] = useState(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
   const [activeTab, setActiveTab] = useState('oc');
   const [themeMode, setThemeMode] = useState('dark');
   const [loading, setLoading] = useState(true);
@@ -85,23 +83,15 @@ function App() {
   const [logisticType, setLogisticType] = useState('all');
   const [logisticPage, setLogisticPage] = useState(1);
   const [logisticSort, setLogisticSort] = useState('total'); // 'total' | 'variacion' | 'nombre' | 'precio_min'
-  const [selectedCategory, setSelectedCategory] = useState('all'); // category filter (N1 group)
-  
-  // Drag & Drop State
+  const [selectedCategory, setSelectedCategory] = useState('all');
+
+  // File Upload State
   const [dragActive, setDragActive] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'syncing' | 'success' | 'error'
   const fileInputRef = useRef(null);
 
-  // Supabase Auth & Session States
-  const [session, setSession] = useState(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [authError, setAuthError] = useState(null);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState('idle'); 
-
-  const userEmail = session?.user?.email || '';
-  const isAdmin = isSuperAdmin(userEmail);
+  const isAdmin = session?.user?.email === 'yleon@padovasac.com' || session?.user?.email === 'yrvingleon@hotmail.com' || session?.user?.email === 'admin@padova.com';
+  const userEmail = session?.user?.email || 'Invitado';
 
   // Initialize DB and Load Data
   useEffect(() => {
@@ -230,89 +220,133 @@ function App() {
       setFilesLog(Object.values(filesMap));
     } catch (err) {
       console.error('Error fetching Supabase data:', err);
-      alert('Error al descargar datos de Supabase: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Load local IndexedDB
   const loadLocalData = async () => {
-    setLoading(true);
     try {
-      const storedOrders = await getOrders();
-      const storedFiles = await getFilesLog();
-      setOrders(storedOrders);
-      setFilesLog(storedFiles);
+      await initDB();
+      const localOrders = await getOrdersLocal();
+      setOrders(localOrders || []);
+      
+      const filesMap = {};
+      (localOrders || []).forEach(row => {
+        const fileKey = row.archivo_origen || 'Local';
+        if (!filesMap[fileKey]) {
+          filesMap[fileKey] = { name: fileKey, project: row.proyecto, type: row.tipo_orden, rowCount: 0, size: 'Local', uploadedAt: 'Reciente' };
+        }
+        filesMap[fileKey].rowCount++;
+      });
+      setFilesLog(Object.values(filesMap));
     } catch (err) {
-      console.error('Error loading data from IndexedDB:', err);
+      console.error('Error loading local data:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      if (isRegistering) {
+        const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword });
+        if (error) throw error;
+        alert('Revisa tu correo para confirmar el registro.');
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword });
+        if (error) throw error;
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
   };
 
   const toggleTheme = () => {
-    const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
-    setThemeMode(nextTheme);
-    document.documentElement.className = nextTheme === 'light' ? 'light-mode' : '';
+    setThemeMode(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
-  // Safe number parser
-  const parseNum = (val) => {
-    if (val === null || val === undefined) return 0;
-    if (typeof val === 'number') return val;
-    const clean = String(val).replace(/[^\d.-]/g, '');
-    const num = parseFloat(clean);
-    return isNaN(num) ? 0 : num;
+  // Utility to get simplified project name
+  const getSimpleProject = (p) => {
+    const s = String(p || '').toUpperCase();
+    if (s.includes('LITORAL')) return 'LITORAL';
+    if (s.includes('SB') || s.includes('BEATRIZ')) return 'SB';
+    if (s.includes('SUNNY')) return 'SUNNY';
+    return 'OTRO';
   };
 
-  // Smart mapper to normalize Excel column names
-  // Priority: exact match > partial match to avoid false positives like "Correo Proveedor"
+  const getProjectColor = (p) => {
+    const sp = getSimpleProject(p);
+    if (sp === 'LITORAL') return '#3b82f6';
+    if (sp === 'SB') return '#8b5cf6';
+    if (sp === 'SUNNY') return '#f59e0b';
+    return '#64748b';
+  };
+
+  const formatCurrency = (val, currency = 'PEN') => {
+    const symbol = currency === 'USD' ? 'U$' : 'S/';
+    return `${symbol} ${Number(val || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  // --- EXCEL PROCESSING LOGIC ---
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
+    else if (e.type === "dragleave") setDragActive(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFiles(e.target.files);
+    }
+  };
+
   const normalizeRow = (rawRow, fileName, defaultProject, defaultType) => {
     const row = {};
-    const cleanKey = (k) => String(k).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-
-    let providerName = '';
-    let orderNum = '';
+    const keys = Object.keys(rawRow);
+    
+    let resourceName = '', qtyValue = 0, priceSin = 0, priceCon = 0, totalVal = 0;
+    let orderNum = '', providerName = '', rucValue = '', dateValue = '', statusValue = '', currencyValue = '';
+    let unitValue = 'UND', gestorValue = '', creatorValue = '', obsValue = '', fechaCreacionValue = '';
+    let cantAtendidaValue = 0, cantPorAtenderValue = 0, estadoFacturacionValue = '', saldoPorPagarValue = 0;
+    let fechaEntregaValue = '', aprobadorValue = '', empresaProyectoValue = '', pedidosValue = '', anioMesValue = '', solicitanteValue = '';
+    let codigoRecursoValue = '', recursoN1Value = '', recursoN2Value = '', recursoN3Value = '';
     let compositeOrderNum = '';
-    let rucValue = '';
-    let dateValue = '';
-    let statusValue = '';
-    let currencyValue = '';
-    let resourceName = '';
-    let qtyValue = 1;
-    let priceSin = 0;
-    let priceCon = 0;
-    let totalVal = 0;
-    let unitValue = 'UND';
-    let gestorValue = 'Sin Asignar';
-    let creatorValue = 'Sistema';
-    let obsValue = '';
-    let cantAtendidaValue = 0;
-    let cantPorAtenderValue = 0;
-    let estadoFacturacionValue = 'Sin Facturación';
-    let saldoPorPagarValue = 0;
-    let fechaEntregaValue = '';
-    let aprobadorValue = '';
-    let empresaProyectoValue = '';
-    let pedidosValue = '';
-    let anioMesValue = '';
-    let solicitanteValue = '';
-    let codigoRecursoValue = '';
-    let recursoN1Value = '';
-    let recursoN2Value = '';
-    let recursoN3Value = '';
-    let fechaCreacionValue = '';
 
-    // First pass: exact matches take highest priority
-    Object.keys(rawRow).forEach((key) => {
-      const ck = cleanKey(key);
-      const val = rawRow[key];
-      const strVal = val !== null && val !== undefined ? String(val).trim() : '';
+    const parseNum = (v) => {
+      if (typeof v === 'number') return v;
+      if (!v) return 0;
+      return parseFloat(String(v).replace(/[^0-9.-]+/g, "")) || 0;
+    };
 
-      // === PROVEEDOR (Critical fix: check exact key first) ===
-      if (ck === 'proveedor' && strVal) {
-        providerName = strVal;
+    keys.forEach(k => {
+      const ck = k.toLowerCase().trim();
+      const val = rawRow[k];
+      const strVal = val ? String(val).trim() : '';
+
+      // === PROVIDER ===
+      if (ck === 'proveedor' || ck === 'proveedor / ruc' || ck === 'socio de negocio' || ck === 'proveedor/socio de negocio') {
+        if (strVal.includes(' - ')) providerName = strVal.split(' - ')[0];
+        else providerName = strVal;
       }
 
       // === ORDEN NUMBER (Type specific) ===
@@ -477,42 +511,17 @@ function App() {
   };
 
   // Process files
-  const handleFiles = async (fileList) => {
-    if (!isAdmin) {
-      alert('No tienes permisos para cargar archivos. Solo los superadministradores pueden subir datos.');
-      return;
-    }
-
-    setLoading(true);
+  const handleFiles = async (filesList) => {
     setSyncStatus('syncing');
-    const newFilesLog = [...filesLog];
-    let newOrders = [...orders];
-
+    setLoading(true);
     const parsedRowsAllFiles = [];
-    const filesToUploadInfo = [];
 
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
-        alert(`El archivo ${file.name} no es un archivo Excel válido.`);
-        continue;
-      }
-
-      // Default type based on name
+    for (const file of filesList) {
       const fn = file.name.toUpperCase();
-      let detectedType = 'OC';
-      if (fn.startsWith('OS') || fn.includes(' OS ') || fn.includes('OS ') || fn.includes('_OS_') || fn.includes('-OS-')) {
-        detectedType = 'OS';
-      }
-
-      let detectedProject = 'PROYECTO GENERAL';
-      if (fn.includes('LITORAL')) {
-        detectedProject = 'LITORAL';
-      } else if (fn.includes('SB') || fn.includes('SANTA BEATRIZ') || fn.includes('BEATRIZ')) {
-        detectedProject = 'SB';
-      } else if (fn.includes('SUNNY')) {
-        detectedProject = 'SUNNY';
-      }
+      let detectedProject = 'LITORAL'; // Fallback
+      if (fn.includes('LITORAL')) detectedProject = 'LITORAL';
+      else if (fn.includes('SB') || fn.includes('SANTA')) detectedProject = 'SB';
+      else if (fn.includes('SUNNY')) detectedProject = 'SUNNY';
 
       try {
         // 1. Upload to Supabase Storage (Original File)
@@ -531,34 +540,25 @@ function App() {
         const workbook = XLSX.read(data, { cellDates: true, dateNF: 'YYYY-MM-DD' });
         
         let sheetsToParse = [];
-
-        // Check if file is combined (e.g. DETALLES.xlsx with EXPORTADOS_OC and EXPORTADOS_OS sheets)
+        // Check for specific sheet names for consolidated file
         const hasSpecificOC = workbook.SheetNames.some(name => ['EXPORTADOS_OC', 'OC'].includes(name.toUpperCase()));
         const hasSpecificOS = workbook.SheetNames.some(name => ['EXPORTADOS_OS', 'OS'].includes(name.toUpperCase()));
 
         if (hasSpecificOC || hasSpecificOS) {
           workbook.SheetNames.forEach(name => {
             const upperName = name.toUpperCase();
-            if (upperName === 'EXPORTADOS_OC' || upperName === 'OC') {
-              sheetsToParse.push({ name, type: 'OC', worksheet: workbook.Sheets[name] });
-            } else if (upperName === 'EXPORTADOS_OS' || upperName === 'OS') {
-              sheetsToParse.push({ name, type: 'OS', worksheet: workbook.Sheets[name] });
-            }
+            if (['EXPORTADOS_OC', 'OC'].includes(upperName)) sheetsToParse.push({ name, type: 'OC' });
+            else if (['EXPORTADOS_OS', 'OS'].includes(upperName)) sheetsToParse.push({ name, type: 'OS' });
           });
         } else {
-          const firstSheetName = workbook.SheetNames[0];
-          sheetsToParse.push({
-            name: firstSheetName,
-            type: detectedType,
-            worksheet: workbook.Sheets[firstSheetName]
-          });
+          // If no specific sheet names, assume type from filename
+          const isOS = fn.includes('OS ') || fn.startsWith('OS') || fn.includes('SERVICIO');
+          sheetsToParse.push({ name: workbook.SheetNames[0], type: isOS ? 'OS' : 'OC' });
         }
 
-        // Clean local/cloud details for this specific file name
-        newOrders = newOrders.filter(o => o.archivo_origen !== file.name);
-
         for (const sheet of sheetsToParse) {
-          const jsonRows = XLSX.utils.sheet_to_json(sheet.worksheet, { defval: '' });
+          const worksheet = workbook.Sheets[sheet.name];
+          const jsonRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
           
           const parsedRows = jsonRows
             .filter(rawRow => Object.keys(rawRow).length > 2)
@@ -574,16 +574,7 @@ function App() {
             });
 
           if (parsedRows.length > 0) {
-            parsedRowsAllFiles.push({ fileName: file.name, rows: parsedRows });
-            
-            filesToUploadInfo.push({
-              name: file.name + ` (${sheet.name})`,
-              project: detectedProject,
-              type: sheet.type,
-              rowCount: parsedRows.length,
-              size: (file.size / 1024).toFixed(1) + ' KB',
-              uploadedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString()
-            });
+            parsedRowsAllFiles.push({ filename: file.name, rows: parsedRows });
           }
         }
 
@@ -637,6 +628,7 @@ function App() {
         
         setSyncStatus('success');
         await fetchSupabaseOrders();
+        await fetchOriginFiles();
       } catch (e) {
         console.error('Error syncing with Supabase:', e);
         setSyncStatus('error');
@@ -645,276 +637,129 @@ function App() {
       }
     } else {
       try {
-        for (const fileData of parsedRowsAllFiles) {
-          const uniqueOriginFiles = [...new Set(fileData.rows.map(r => r.archivo_origen))];
-          uniqueOriginFiles.forEach(originFile => {
-            newOrders = newOrders.filter(o => o.archivo_origen !== originFile);
-          });
-          newOrders.push(...fileData.rows);
-        }
-
-        filesToUploadInfo.forEach((info) => {
-          const logIndex = newFilesLog.findIndex(f => f.name === info.name);
-          if (logIndex >= 0) {
-            newFilesLog[logIndex] = info;
-          } else {
-            newFilesLog.push(info);
-          }
-        });
-
-        await saveOrders(newOrders);
-        await saveFilesLog(newFilesLog);
-        setOrders(newOrders);
-        setFilesLog(newFilesLog);
+        const allNewRows = parsedRowsAllFiles.flatMap(fd => fd.rows);
+        setOrders(prev => [...prev, ...allNewRows]);
+        await saveOrdersLocal(allNewRows);
         setSyncStatus('success');
+        setLoading(false);
       } catch (e) {
-        console.error('Error saving locally:', e);
         setSyncStatus('error');
-      } finally {
         setLoading(false);
       }
     }
   };
 
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFiles(e.dataTransfer.files);
-    }
-  };
-
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFiles(e.target.files);
-    }
-  };
-
   const handleClearDatabase = async () => {
-    if (!isAdmin) {
-      alert('Solo los superadministradores pueden vaciar la base de datos.');
-      return;
-    }
-    if (window.confirm('¿Estás seguro de que deseas vaciar toda la base de datos? Esta acción no se puede deshacer.')) {
-      setLoading(true);
-      if (isSupabaseConfigured && session) {
-        try {
-          let hasMore = true;
-          while(hasMore) {
-            const { data, error } = await supabase.from('order_details').select('id').limit(1000);
-            if (error) throw error;
-            if (!data || data.length === 0) { hasMore = false; break; }
-            const ids = data.map(d => d.id);
-            const { error: delErr } = await supabase.from('order_details').delete().in('id', ids);
-            if (delErr) throw delErr;
-          }
-          await fetchSupabaseOrders();
-        } catch (err) {
-          console.error('Error clearing database:', err);
-          alert('Error al borrar los datos de Supabase: ' + err.message);
-          setLoading(false);
-        }
-      } else {
-        try {
-          await clearAllDB();
-          setOrders([]);
-          setFilesLog([]);
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setLoading(false);
-        }
-      }
-      setExpandedOrderId(null);
-      setCurrentPage(1);
-    }
-  };
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError(null);
-
-    if (!authEmail || !authPassword) {
-      setAuthError('Por favor introduce tu correo y contraseña.');
-      setAuthLoading(false);
-      return;
-    }
-
+    if (!window.confirm("¿Estás seguro de vaciar TODA la base de datos? Esta acción no se puede deshacer.")) return;
+    
+    setLoading(true);
     try {
-      if (isRegistering) {
-        const { error } = await supabase.auth.signUp({
-          email: authEmail,
-          password: authPassword
-        });
+      if (isSupabaseConfigured && session) {
+        const { error } = await supabase.from('order_details').delete().neq('nro_orden', 'FORCE_DELETE_ALL');
         if (error) throw error;
-        alert('¡Registro completo! Revisa tu correo para confirmar tu cuenta y luego inicia sesión.');
-        setIsRegistering(false);
+        
+        // Also clear storage
+        if (originFiles.length > 0) {
+          const { error: storageError } = await supabase.storage.from('matrix-files').remove(originFiles.map(f => f.name));
+          if (storageError) console.error('Error clearing storage:', storageError);
+        }
+
+        setOrders([]);
+        setFilesLog([]);
+        setOriginFiles([]);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: authEmail,
-          password: authPassword
-        });
-        if (error) throw error;
+        await clearLocalDB();
+        setOrders([]);
+        setFilesLog([]);
       }
+      alert("Base de datos vaciada correctamente.");
     } catch (err) {
-      console.error(err);
-      setAuthError(err.message || 'Error en la autenticación.');
+      alert("Error al vaciar BD: " + err.message);
     } finally {
-      setAuthLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleSignOut = async () => {
-    if (window.confirm('¿Deseas cerrar tu sesión actual?')) {
-      setLoading(true);
-      try {
-        await supabase.auth.signOut();
-      } catch (err) {
-        console.error(err);
-      }
-    }
-  };
-
-  // Group detailed rows into orders
-  const getGroupedOrders = () => {
-    const groups = {};
-    orders.forEach((row) => {
-      const key = `${row.tipo_orden}-${row.nro_orden}-${row.proveedor}`;
-      if (!groups[key]) {
-        groups[key] = {
+  // Group items back into orders for display
+  const allGroupedOrders = useMemo(() => {
+    const ordersMap = {};
+    orders.forEach(row => {
+      const key = `${row.nro_orden}-${getSimpleProject(row.proyecto)}-${row.tipo_orden}`;
+      if (!ordersMap[key]) {
+        ordersMap[key] = {
           id: key,
           nro_orden: row.nro_orden,
           proyecto: row.proyecto,
-          tipo_orden: row.tipo_orden,
           proveedor: row.proveedor,
           ruc: row.ruc,
           fecha: row.fecha,
           estado: row.estado,
           moneda: row.moneda,
-          archivo_origen: row.archivo_origen,
-          total_sin_igv: 0,
           total_con_igv: 0,
-          gestor_compra: row.gestor_compra || 'Sin Asignar',
-          creado_por: row.creado_por || 'Sistema',
-          observacion: row.observacion || '',
-          estado_facturacion: row.estado_facturacion || 'Sin Facturación',
-          saldo_por_pagar: row.saldo_por_pagar || 0,
-          fecha_entrega: row.fecha_entrega || '',
-          aprobador: row.aprobador || '',
-          empresa_proyecto: row.empresa_proyecto || '',
-          pedidos: row.pedidos || '',
-          anio_mes: row.anio_mes || '',
-          solicitante: row.solicitante || '',
+          saldo_por_pagar: 0,
+          archivo_origen: row.archivo_origen,
+          tipo_orden: row.tipo_orden,
+          empresa_proyecto: row.empresa_proyecto,
+          gestor_compra: row.gestor_compra,
+          solicitante: row.solicitante,
+          creado_por: row.creado_por,
+          pedidos: row.pedidos,
+          fecha_entrega: row.fecha_entrega,
+          anio_mes: row.anio_mes,
+          aprobador: row.aprobador,
+          observacion: row.observacion,
           items: []
         };
       }
-      
-      groups[key].total_sin_igv += row.precio_sin_igv * row.cantidad;
-      groups[key].total_con_igv += row.parcial_final;
-      
-      groups[key].items.push({
+      ordersMap[key].items.push({
         id: row.id,
         recurso: row.recurso,
-        codigo_recurso: row.codigo_recurso,
+        unidad: row.unidad,
         cantidad: row.cantidad,
-        unidad: row.unidad || 'UND',
         precio_sin_igv: row.precio_sin_igv,
         precio_con_igv: row.precio_con_igv,
         total: row.parcial_final,
-        cant_atendida: row.cant_atendida || 0,
-        cant_por_atender: row.cant_por_atender || 0
+        cant_atendida: row.cant_atendida,
+        cant_por_atender: row.cant_por_atender
       });
+      ordersMap[key].total_con_igv += (row.parcial_final || 0);
+      ordersMap[key].saldo_por_pagar += (row.saldo_por_pagar || 0);
     });
+    return Object.values(ordersMap).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+  }, [orders]);
 
-    return Object.values(groups);
-  };
-
-  const allGroupedOrders = getGroupedOrders();
-
-  // Formatter helpers
-  const formatCurrency = (amt, currency) => {
-    const cur = String(currency || '').toUpperCase().trim();
-    let symbol = 'S/.';
-    if (cur === 'USD' || cur === 'DOLARES' || cur === 'US$' || cur === 'U$') symbol = 'U$';
-    else if (cur === 'PEN' || cur === 'SOLES' || cur === 'S/.') symbol = 'S/.';
-    return symbol + ' ' + (amt || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  // Get project accent colors
-  const getProjectColor = (p) => {
-    const proj = String(p || '').toUpperCase().trim();
-    if (proj.includes('LITORAL')) return 'var(--color-litoral)';
-    if (proj.includes('SB') || proj.includes('SANTA BEATRIZ') || proj.includes('FIDENZ') || proj.includes('BEATRIZ')) return 'var(--color-sb)';
-    if (proj.includes('SUNNY') || proj.includes('MELCEN')) return 'var(--color-sunny)';
-    return 'var(--text-muted)';
-  };
-
-  // Detect simplified project name from full proyecto field
-  const getSimpleProject = (proyecto) => {
-    const p = String(proyecto || '').toUpperCase();
-    if (p.includes('LITORAL')) return 'LITORAL';
-    if (p.includes('SANTA BEATRIZ') || p.includes('SB') || p.includes('FIDENZ') || p.includes('BEATRIZ')) return 'SB';
-    if (p.includes('SUNNY') || p.includes('MELCEN')) return 'SUNNY';
-    return 'OTRO';
-  };
-
-  // Dashboard stats engine
   const dashboardStats = useMemo(() => {
-    const filterProject = (o) => {
-      if (selectedProject === 'all') return true;
-      return getSimpleProject(o.proyecto) === selectedProject;
-    };
+    const calculateMetrics = (orderList) => {
+      const totalSpendUSD = orderList.reduce((acc, o) => {
+        const val = o.total_con_igv || 0;
+        return acc + (o.moneda === 'USD' ? val : val / 3.8);
+      }, 0);
 
-    const ocOrders = allGroupedOrders.filter(o => o.tipo_orden === 'OC' && filterProject(o));
-    const osOrders = allGroupedOrders.filter(o => o.tipo_orden === 'OS' && filterProject(o));
-
-    const calculateMetrics = (ordersList) => {
-      let usd = 0;
-      let pen = 0;
-      const count = ordersList.length;
       const providerSpend = {};
-      const projectSpend = { LITORAL: 0, SB: 0, SUNNY: 0, OTRO: 0 };
-      const statusCount = {};
-
-      ordersList.forEach(o => {
-        const amt = o.total_con_igv;
-        const cur = o.moneda;
-
-        if (cur === 'USD') usd += amt;
-        else pen += amt;
-
-        const usdEquivalent = cur === 'USD' ? amt : amt / 3.8;
-        providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + usdEquivalent;
-
-        const sp = getSimpleProject(o.proyecto);
-        projectSpend[sp] = (projectSpend[sp] || 0) + usdEquivalent;
-
-        statusCount[o.estado] = (statusCount[o.estado] || 0) + 1;
+      orderList.forEach(o => {
+        const val = o.total_con_igv || 0;
+        const valUSD = o.moneda === 'USD' ? val : val / 3.8;
+        providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + valUSD;
       });
 
       const topProviders = Object.entries(providerSpend)
-        .map(([name, val]) => ({ name, val }))
-        .sort((a, b) => b.val - a.val)
-        .slice(0, 5);
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([name, val]) => ({ name: name.length > 15 ? name.substring(0, 15) + '..' : name, val }));
 
-      const topStatuses = Object.entries(statusCount)
-        .map(([status, count]) => ({ status, count }))
-        .sort((a, b) => b.count - a.count);
+      const projectSpend = { 'LITORAL': 0, 'SB': 0, 'SUNNY': 0, 'OTRO': 0 };
+      orderList.forEach(o => {
+        const sp = getSimpleProject(o.proyecto);
+        const val = o.total_con_igv || 0;
+        const valUSD = o.moneda === 'USD' ? val : val / 3.8;
+        projectSpend[sp] = (projectSpend[sp] || 0) + valUSD;
+      });
 
-      return { usd, pen, count, topProviders, projectSpend, topStatuses };
+      return { totalSpendUSD, topProviders, projectSpend };
     };
+
+    const ocOrders = allGroupedOrders.filter(o => o.tipo_orden === 'OC' && (selectedProject === 'all' || getSimpleProject(o.proyecto) === selectedProject));
+    const osOrders = allGroupedOrders.filter(o => o.tipo_orden === 'OS' && (selectedProject === 'all' || getSimpleProject(o.proyecto) === selectedProject));
 
     return {
       oc: calculateMetrics(ocOrders),
@@ -1242,7 +1087,6 @@ function App() {
         order.items.some(item => String(item.recurso).toLowerCase().includes(searchQuery.toLowerCase()));
 
       const matchesStatus = selectedStatus === 'all' || order.estado === selectedStatus;
-
       return matchesSearch && matchesStatus;
     });
 
@@ -1252,27 +1096,22 @@ function App() {
     const totalPages = Math.ceil(filteredForTable.length / itemsPerPage);
 
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+      <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         
-        {/* KPI CARDS */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px' }}>
+        {/* KPI Row */}
+        <div className="metrics-grid">
           <div className="metric-card" style={{ '--card-accent-color': accentColor }}>
-            <span className="metric-title">Gasto Total S/.</span>
-            <span className="metric-value" style={{ fontSize: '22px' }}>{formatCurrency(stats.pen, 'PEN')}</span>
-            <span className="metric-sub">{type === 'OC' ? 'Órdenes de Compra' : 'Órdenes de Servicio'}</span>
-          </div>
-          <div className="metric-card" style={{ '--card-accent-color': accentColor }}>
-            <span className="metric-title">Gasto Total U$</span>
-            <span className="metric-value" style={{ fontSize: '22px' }}>{formatCurrency(stats.usd, 'USD')}</span>
-            <span className="metric-sub">En dólares americanos</span>
-          </div>
-          <div className="metric-card" style={{ '--card-accent-color': accentColor }}>
-            <span className="metric-title">Cantidad de Órdenes</span>
-            <span className="metric-value">{stats.count}</span>
-            <span className="metric-sub">Órdenes únicas ({type})</span>
+            <span className="metric-title">Inversión {type}</span>
+            <span className="metric-value">{formatCurrency(stats.totalSpendUSD, 'USD')} Eq.</span>
+            <span className="metric-sub">Consolidado del proyecto seleccionado</span>
           </div>
           <div className="metric-card" style={{ '--card-accent-color': 'var(--color-success)' }}>
-            <span className="metric-title">Proveedores únicos</span>
+            <span className="metric-title">Nro de Órdenes</span>
+            <span className="metric-value">{projectFiltered.length}</span>
+            <span className="metric-sub">Total emitidas</span>
+          </div>
+          <div className="metric-card" style={{ '--card-accent-color': 'var(--color-primary)' }}>
+            <span className="metric-title">{type === 'OC' ? 'Proveedores' : 'Socio de Negocio'}</span>
             <span className="metric-value">{new Set(projectFiltered.map(o => o.proveedor)).size}</span>
             <span className="metric-sub">{type === 'OC' ? 'Proveedores activos' : 'Socios de negocio'}</span>
           </div>
@@ -1365,17 +1204,13 @@ function App() {
           </div>
         </div>
 
-        {/* LIST & FILTER SECTOR */}
+        {/* Data Filter Bar */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
             <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: '700', margin: 0 }}>
-              Listado de Órdenes de {typeLabel}
+              Lista Maestra de {typeLabel}s
             </h3>
-            <button 
-              onClick={() => exportOrdersToXLSX(type)}
-              className="btn-primary" 
-              style={{ fontSize: '12px', padding: '8px 14px', borderRadius: '8px', backgroundColor: 'var(--color-success)' }}
-            >
+            <button onClick={() => exportOrdersToXLSX(type)} className="btn-primary" style={{ backgroundColor: 'var(--color-success)' }}>
               <Download size={14} />
               <span>Exportar Excel</span>
             </button>
@@ -1384,44 +1219,28 @@ function App() {
           <section className="filter-bar" style={{ marginBottom: '20px' }}>
             <div className="search-input-wrapper">
               <Search className="search-icon" size={18} />
-              <input 
-                type="text" 
-                className="search-input" 
-                placeholder={`Buscar por orden, ${type === 'OC' ? 'proveedor' : 'socio de negocio'}, RUC, gestor o ítem...`}
+              <input type="text" className="search-input"
+                placeholder={`Buscar por Nro. Orden, Proveedor, Recurso o RUC...`}
                 value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              />
+                onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }} />
             </div>
-
             <div className="filter-options">
               <select className="filter-select" value={selectedStatus}
                 onChange={(e) => { setSelectedStatus(e.target.value); setCurrentPage(1); }}>
-                <option value="all">Todos los Estados</option>
-                {[...new Set(projectFiltered.map(o => o.estado).filter(Boolean))].map(status => (
-                  <option key={status} value={status}>{status}</option>
-                ))}
-              </select>
-
-              <select className="filter-select"
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === 'all') setSearchQuery('');
-                  else setSearchQuery(val);
-                  setCurrentPage(1);
-                }}>
-                <option value="all">Todos los Estados Facturación</option>
-                {[...new Set(projectFiltered.map(o => o.estado_facturacion).filter(Boolean))].map(est => (
-                  <option key={est} value={est}>{est}</option>
-                ))}
+                <option value="all">Cualquier Estado</option>
+                <option value="Emitido">Emitido</option>
+                <option value="Aprobado">Aprobado</option>
+                <option value="En Almacén">En Almacén</option>
+                <option value="Anulado">Anulado</option>
               </select>
             </div>
           </section>
 
-          {filteredForTable.length === 0 ? (
+          {currentOrders.length === 0 ? (
             <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
               <AlertTriangle size={48} style={{ margin: '0 auto 16px', color: 'var(--color-warning)' }} />
               <h2>No se encontraron resultados</h2>
-              <p style={{ color: 'var(--text-secondary)' }}>Ajusta tus filtros o ingresa otra palabra clave.</p>
+              <p style={{ color: 'var(--text-secondary)' }}>Ajusta los filtros de búsqueda o cambia de proyecto.</p>
             </div>
           ) : (
             <div className="table-container">
@@ -1535,11 +1354,6 @@ function App() {
                   })}
                 </tbody>
               </table>
-            </div>                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
             </div>
           )}
 
@@ -1585,9 +1399,9 @@ function App() {
 
     // Emoji maps
     const macroEmoji = {
-      'MATERIALES': '🧱',
-      'SERVICIOS Y SUBCONTRATOS': '👷',
-      'ACTIVOS Y EQUIPOS': '🚜'
+      '1. MATERIALES': '🧱',
+      '2. SUBCONTRATOS Y SERVICIOS': '👷',
+      '3. ACTIVOS': '🚜'
     };
 
     const catEmoji = {
@@ -1603,7 +1417,7 @@ function App() {
       'COMBUSTIBLES': '⛽',
       'ÚTILES Y OFICINA': '📄',
       'ALBAÑILERÍA Y ACABADOS': '🧱',
-      'OTROS / GENERAL': '📦'
+      'OTROS / VARIOS': '📦'
     };
 
     return (
@@ -2067,7 +1881,7 @@ function App() {
             )}
 
             {isSupabaseConfigured ? (
-              <span className="badge" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '8px' }}>
+              <span className="badge" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 129px', borderRadius: '8px' }}>
                 <Cloud size={16} />
                 <span style={{ fontWeight: '600', fontSize: '12px' }}>En Línea</span>
               </span>
