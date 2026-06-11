@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { initDB, saveOrdersLocal, getOrdersLocal, clearLocalDB } from './db';
+import { initDB, saveOrders as saveOrdersLocal, getOrders as getOrdersLocal, clearAllDB as clearLocalDB } from './db';
 import './App.css';
 
 // Chart components from Recharts
