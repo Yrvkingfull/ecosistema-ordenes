@@ -65,6 +65,7 @@ function App() {
   // Data States
   const [orders, setOrders] = useState([]);
   const [filesLog, setFilesLog] = useState([]);
+  const [originFiles, setOriginFiles] = useState([]); // List of original files from Supabase Storage
   
   // Table Pagination & Expanded Rows
   const [currentPage, setCurrentPage] = useState(1);
@@ -105,11 +106,12 @@ function App() {
   useEffect(() => {
     document.documentElement.className = themeMode === 'light' ? 'light-mode' : '';
 
-    if (isSupabaseConfigured) {
+      if (isSupabaseConfigured) {
       supabase.auth.getSession().then(({ data: { session } }) => {
         setSession(session);
         if (session) {
           fetchSupabaseOrders();
+          fetchOriginFiles();
         } else {
           setLoading(false);
         }
@@ -119,9 +121,11 @@ function App() {
         setSession(session);
         if (session) {
           fetchSupabaseOrders();
+          fetchOriginFiles();
         } else {
           setOrders([]);
           setFilesLog([]);
+          setOriginFiles([]);
           setLoading(false);
         }
       });
@@ -131,6 +135,28 @@ function App() {
       loadLocalData();
     }
   }, []);
+
+  // Fetch list of original files from Supabase Storage
+  const fetchOriginFiles = async () => {
+    try {
+      const { data, error } = await supabase.storage.from('matrix-files').list('', {
+        limit: 100,
+        offset: 0,
+        sortBy: { column: 'created_at', order: 'desc' }
+      });
+
+      if (error) {
+        if (error.message.includes('not found')) {
+          console.log('Bucket "matrix-files" not found. Need to create it.');
+        } else {
+          throw error;
+        }
+      }
+      setOriginFiles(data || []);
+    } catch (err) {
+      console.error('Error fetching files from storage:', err);
+    }
+  };
 
   // === PADOVA CLASSIFICATION PRESERVER (Strict 3-Macro Groups) ===
   const classifyResource = (row) => {
@@ -488,6 +514,18 @@ function App() {
       }
 
       try {
+        // 1. Upload to Supabase Storage (Original File)
+        if (isSupabaseConfigured && session) {
+          const { error: uploadError } = await supabase.storage
+            .from('matrix-files')
+            .upload(`${file.name}`, file, {
+              upsert: true,
+              cacheControl: '3600'
+            });
+          
+          if (uploadError) console.error('Error uploading original file:', uploadError);
+        }
+
         const data = await file.arrayBuffer();
         const workbook = XLSX.read(data, { cellDates: true, dateNF: 'YYYY-MM-DD' });
         
@@ -1735,11 +1773,14 @@ function App() {
                       <React.Fragment key={product.recurso}>
                         <tr className={isExpanded ? 'expanded' : ''}>
                           <td>
-                            <span style={{ fontSize: '10px', backgroundColor: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px', fontWeight: '700' }}>
+                            <span style={{ fontSize: '10px', backgroundColor: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px', fontWeight: '700', whiteSpace: 'normal', display: 'block', marginBottom: '4px' }}>
+                              {product.macro}
+                            </span>
+                            <span style={{ fontSize: '9px', opacity: 0.6, textTransform: 'uppercase' }}>
                               {catEmoji[product.sub] || '📦'} {product.sub}
                             </span>
                           </td>
-                          <td style={{ fontWeight: '600', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <td style={{ fontWeight: '600', padding: '16px 12px', lineHeight: '1.4' }}>
                             {product.recurso}
                           </td>
                           <td style={{ textAlign: 'center' }}>{product.unidad}</td>
@@ -1883,6 +1924,70 @@ function App() {
     );
   };
 
+  // === RENDER ORIGIN FILES TAB ===
+  const renderOriginFilesTab = () => {
+    return (
+      <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', margin: 0 }}>
+            Archivos Matriz (Originales)
+          </h3>
+          <button className="btn-outline" onClick={fetchOriginFiles}>
+            <Activity size={18} />
+            <span>Actualizar Lista</span>
+          </button>
+        </div>
+
+        <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+          Desde aquí puedes descargar los archivos Excel originales que se utilizaron para alimentar este tablero.
+        </p>
+
+        {originFiles.length === 0 ? (
+          <div className="chart-card" style={{ textAlign: 'center', padding: '48px' }}>
+            <Database size={48} style={{ margin: '0 auto 16px', color: 'var(--text-muted)' }} />
+            <p>No se encontraron archivos en el almacenamiento de la nube.</p>
+          </div>
+        ) : (
+          <div className="grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
+            {originFiles.map((file) => (
+              <div key={file.id} className="file-card" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div className="logo-icon" style={{ width: '40px', height: '40px', background: 'rgba(16,185,129,0.1)', color: '#10b981' }}>
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: '600', fontSize: '14px' }}>{file.name}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Subido: {new Date(file.created_at).toLocaleDateString()}</div>
+                  </div>
+                </div>
+                <button 
+                  onClick={async () => {
+                    const { data, error } = await supabase.storage.from('matrix-files').download(file.name);
+                    if (error) {
+                      alert('Error al descargar: ' + error.message);
+                    } else {
+                      const url = window.URL.createObjectURL(data);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = file.name;
+                      document.body.appendChild(a);
+                      a.click();
+                      window.URL.revokeObjectURL(url);
+                    }
+                  }}
+                  className="btn-primary" 
+                  style={{ padding: '8px 12px', fontSize: '12px' }}
+                >
+                  <Download size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
 
   return (
     <div className="app-container">
@@ -1916,6 +2021,13 @@ function App() {
                 onClick={() => { setActiveTab('logistics'); setExpandedOrderId(null); }}>
                 <Package size={20} />
                 <span>Análisis Logístico</span>
+              </button>
+            </li>
+            <li>
+              <button className={`nav-item ${activeTab === 'storage' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('storage'); fetchOriginFiles(); }}>
+                <Database size={20} />
+                <span>Archivos de Origen</span>
               </button>
             </li>
             {isAdmin && (
@@ -2024,6 +2136,7 @@ function App() {
             {activeTab === 'oc' && renderDashboardAndTable('OC')}
             {activeTab === 'os' && renderDashboardAndTable('OS')}
             {activeTab === 'logistics' && renderLogisticsDashboard()}
+            {activeTab === 'storage' && renderOriginFilesTab()}
             {activeTab === 'users' && renderUsersTab()}
 
             {/* Upload Tab (Admins only) */}
