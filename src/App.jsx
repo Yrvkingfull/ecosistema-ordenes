@@ -132,18 +132,26 @@ function App() {
     }
   }, []);
 
-  // === PADOVA CLASSIFICATION PRESERVER (With Surgical Fixes) ===
+  // === PADOVA CLASSIFICATION PRESERVER (Strict 3-Macro Groups) ===
   const classifyResource = (row) => {
-    let n1 = row.recurso_n1 || 'MATERIALES';
+    let n1 = String(row.recurso_n1 || '').toUpperCase();
     let n2 = row.recurso_n2 || 'OTROS';
     const text = String(row.recurso || '').toUpperCase();
+    const type = String(row.tipo_orden || 'OC').toUpperCase();
 
-    // Preserve Padova's original labels but fix obvious "weird" ones
-    if (text.includes('FLETE') || text.includes('TRANSPORTE')) {
-      if (n1 === 'MATERIALES') n1 = 'SERVICIOS';
+    let finalMacro = '1. MATERIALES'; // Default
+
+    // Logic to force into the 3 requested groups
+    if (type === 'OS' || n1.includes('SERV') || n1.includes('SUB') || 
+        text.includes('SERVICIO') || text.includes('FLETE') || text.includes('MANO DE OBRA') || text.includes('TRABAJO')) {
+      finalMacro = '2. SUBCONTRATOS Y SERVICIOS';
+    } else if (n1.includes('ACT') || n1.includes('EQUIP') || text.includes('ACTIVO') || text.includes('MAQUINARIA') || text.includes('HERRAMIENTA')) {
+      finalMacro = '3. ACTIVOS';
+    } else {
+      finalMacro = '1. MATERIALES';
     }
 
-    return { macro: n1, sub: n2 };
+    return { macro: finalMacro, sub: n2 };
   };
 
   // Fetch orders from Supabase (Recursive to bypass 1000 limit)
@@ -402,21 +410,18 @@ function App() {
     row.recurso = resourceName || 'ÍTEM SIN DESCRIPCIÓN';
     row.codigo_recurso = codigoRecursoValue;
     
-    // --- PADOVA STANDARD CLASSIFICATION WITH SURGICAL FIXES ---
-    let n1 = recursoN1Value || (defaultType === 'OS' ? 'SERVICIOS' : 'MATERIALES');
-    let n2 = recursoN2Value || 'OTROS / VARIOS';
-
-    // Surgical Correction for "Weird" entries
+    // --- PADOVA STANDARDIZED MACRO-GROUPS ---
     const text = String(resourceName).toUpperCase();
-    if (text.includes('FLETE') || text.includes('TRANSPORTE') || text.includes('MOVILIDAD')) {
-      if (n1 === 'MATERIALES') n1 = 'SERVICIOS'; // Fix: Transports are usually services
-    }
-    if (text.includes('ALQUILER') && n1 === 'MATERIALES') {
-      n1 = 'SERVICIOS'; // Fix: Rentals are services
+    let n1 = '1. MATERIALES';
+    
+    if (defaultType === 'OS' || text.includes('SERVICIO') || text.includes('FLETE') || text.includes('TRABAJO') || text.includes('MANO DE OBRA')) {
+      n1 = '2. SUBCONTRATOS Y SERVICIOS';
+    } else if (text.includes('ACTIVO') || text.includes('MAQUINARIA') || text.includes('EQUIPO') || text.includes('HERRAMIENTA')) {
+      n1 = '3. ACTIVOS';
     }
 
     row.recurso_n1 = n1; 
-    row.recurso_n2 = n2;
+    row.recurso_n2 = recursoN2Value || 'OTROS / VARIOS';
     row.recurso_n3 = recursoN3Value;
 
     row.cantidad = qtyValue || 1;
