@@ -19,9 +19,17 @@ import {
   AlertTriangle,
   Download,
   Info,
-  Calendar
+  Calendar,
+  Lock,
+  Mail,
+  User,
+  LogOut,
+  Cloud,
+  Database,
+  ArrowRight
 } from 'lucide-react';
 import { getOrders, saveOrders, getFilesLog, saveFilesLog, clearAllDB } from './db';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 function App() {
   // Navigation & UI States
@@ -48,25 +56,102 @@ function App() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef(null);
 
+  // Supabase Auth & Session States
+  const [session, setSession] = useState(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'syncing' | 'success' | 'error'
+
   // Initialize DB and Load Data
   useEffect(() => {
-    async function loadData() {
-      try {
-        const storedOrders = await getOrders();
-        const storedFiles = await getFilesLog();
-        setOrders(storedOrders);
-        setFilesLog(storedFiles);
-      } catch (err) {
-        console.error('Error loading data from IndexedDB:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-    
     // Set theme
     document.documentElement.className = themeMode === 'light' ? 'light-mode' : '';
+
+    if (isSupabaseConfigured) {
+      // 1. Supabase Mode Setup
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+        if (session) {
+          fetchSupabaseOrders();
+        } else {
+          setLoading(false);
+        }
+      });
+
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+        if (session) {
+          fetchSupabaseOrders();
+        } else {
+          setOrders([]);
+          setFilesLog([]);
+          setLoading(false);
+        }
+      });
+
+      return () => subscription.unsubscribe();
+    } else {
+      // 2. Local Mode Setup
+      loadLocalData();
+    }
   }, []);
+
+  // Fetch orders from Supabase PostgreSQL
+  const fetchSupabaseOrders = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('order_details')
+        .select('*')
+        .order('fecha', { ascending: false });
+
+      if (error) throw error;
+
+      setOrders(data || []);
+
+      // Group file names for the files log
+      const filesMap = {};
+      data.forEach(row => {
+        if (row.archivo_origen && !filesMap[row.archivo_origen]) {
+          filesMap[row.archivo_origen] = {
+            name: row.archivo_origen,
+            project: row.proyecto,
+            type: row.tipo_orden,
+            rowCount: 0,
+            size: 'Nube',
+            uploadedAt: new Date(row.created_at).toLocaleDateString() + ' ' + new Date(row.created_at).toLocaleTimeString()
+          };
+        }
+        if (row.archivo_origen) {
+          filesMap[row.archivo_origen].rowCount++;
+        }
+      });
+      setFilesLog(Object.values(filesMap));
+    } catch (err) {
+      console.error('Error fetching Supabase data:', err);
+      alert('Error al descargar datos de Supabase: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load local IndexedDB database
+  const loadLocalData = async () => {
+    setLoading(true);
+    try {
+      const storedOrders = await getOrders();
+      const storedFiles = await getFilesLog();
+      setOrders(storedOrders);
+      setFilesLog(storedFiles);
+    } catch (err) {
+      console.error('Error loading data from IndexedDB:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleTheme = () => {
     const nextTheme = themeMode === 'dark' ? 'light' : 'dark';
@@ -141,16 +226,19 @@ function App() {
     row.moneda = row.moneda || 'COP';
     row.fecha = row.fecha || 'Sin Fecha';
     row.archivo_origen = fileName;
-    row.created_at = new Date().toISOString();
 
     return row;
   };
 
-  // Handle excel files parsing
+  // Handle excel files parsing & database syncing
   const handleFiles = async (fileList) => {
     setLoading(true);
+    setSyncStatus('syncing');
     const newFilesLog = [...filesLog];
     let newOrders = [...orders];
+
+    const parsedRowsAllFiles = [];
+    const filesToUploadInfo = [];
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
@@ -182,47 +270,92 @@ function App() {
         const worksheet = workbook.Sheets[firstSheetName];
         const jsonRows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-        // Clean out any old orders uploaded from this same filename to prevent duplication
-        newOrders = newOrders.filter(o => o.archivo_origen !== file.name);
-
         const parsedRows = jsonRows.map(rawRow => 
           normalizeRow(rawRow, file.name, detectedProject, detectedType)
         );
 
-        newOrders.push(...parsedRows);
-
-        // Update file import logs
-        const logIndex = newFilesLog.findIndex(f => f.name === file.name);
-        const logEntry = {
+        parsedRowsAllFiles.push({ fileName: file.name, rows: parsedRows });
+        
+        filesToUploadInfo.push({
           name: file.name,
           project: detectedProject,
           type: detectedType,
           rowCount: parsedRows.length,
           size: (file.size / 1024).toFixed(1) + ' KB',
           uploadedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString()
-        };
+        });
 
-        if (logIndex >= 0) {
-          newFilesLog[logIndex] = logEntry;
-        } else {
-          newFilesLog.push(logEntry);
-        }
       } catch (err) {
         console.error('Error processing excel file:', err);
         alert(`Error al procesar el archivo ${file.name}: ` + err.message);
       }
     }
 
-    // Save back to IndexedDB
-    try {
-      await saveOrders(newOrders);
-      await saveFilesLog(newFilesLog);
-      setOrders(newOrders);
-      setFilesLog(newFilesLog);
-    } catch (e) {
-      console.error('Error saving to DB:', e);
-    } finally {
-      setLoading(false);
+    if (isSupabaseConfigured && session) {
+      // 1. Supabase Mode Sync
+      try {
+        for (const fileData of parsedRowsAllFiles) {
+          // Clear old records for this file first
+          const { error: deleteError } = await supabase
+            .from('order_details')
+            .delete()
+            .eq('archivo_origen', fileData.fileName);
+
+          if (deleteError) throw deleteError;
+
+          // Insert in chunks of 500 rows to prevent DB limits
+          const rowsWithUser = fileData.rows.map(r => ({
+            ...r,
+            user_id: session.user.id
+          }));
+
+          const chunkSize = 500;
+          for (let idx = 0; idx < rowsWithUser.length; idx += chunkSize) {
+            const chunk = rowsWithUser.slice(idx, idx + chunkSize);
+            const { error: insertError } = await supabase
+              .from('order_details')
+              .insert(chunk);
+
+            if (insertError) throw insertError;
+          }
+        }
+        
+        setSyncStatus('success');
+        await fetchSupabaseOrders();
+      } catch (e) {
+        console.error('Error syncing with Supabase:', e);
+        setSyncStatus('error');
+        alert('Error de sincronización con la base de datos Supabase: ' + e.message);
+        setLoading(false);
+      }
+    } else {
+      // 2. Local Mode Save
+      try {
+        for (const fileData of parsedRowsAllFiles) {
+          newOrders = newOrders.filter(o => o.archivo_origen !== fileData.fileName);
+          newOrders.push(...fileData.rows);
+        }
+
+        filesToUploadInfo.forEach((info) => {
+          const logIndex = newFilesLog.findIndex(f => f.name === info.name);
+          if (logIndex >= 0) {
+            newFilesLog[logIndex] = info;
+          } else {
+            newFilesLog.push(info);
+          }
+        });
+
+        await saveOrders(newOrders);
+        await saveFilesLog(newFilesLog);
+        setOrders(newOrders);
+        setFilesLog(newFilesLog);
+        setSyncStatus('success');
+      } catch (e) {
+        console.error('Error saving locally:', e);
+        setSyncStatus('error');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -254,16 +387,79 @@ function App() {
   const handleClearDatabase = async () => {
     if (window.confirm('¿Estás seguro de que deseas vaciar toda la base de datos? Se borrarán todos los registros cargados.')) {
       setLoading(true);
+      if (isSupabaseConfigured && session) {
+        try {
+          const { error } = await supabase
+            .from('order_details')
+            .delete()
+            .neq('proyecto', '___DUMMY_VALUE___');
+
+          if (error) throw error;
+          await fetchSupabaseOrders();
+        } catch (err) {
+          console.error(err);
+          alert('Error al borrar los datos de Supabase: ' + err.message);
+          setLoading(false);
+        }
+      } else {
+        try {
+          await clearAllDB();
+          setOrders([]);
+          setFilesLog([]);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      }
+      setExpandedOrderId(null);
+      setCurrentPage(1);
+    }
+  };
+
+  // Auth Operations
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+
+    if (!authEmail || !authPassword) {
+      setAuthError('Por favor introduce tu correo y contraseña.');
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      if (isRegistering) {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+        alert('¡Registro completo! Verifica tu correo electrónico para confirmar la cuenta si corresponde, o inicia sesión.');
+        setIsRegistering(false);
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+      }
+    } catch (err) {
+      console.error('Auth error:', err);
+      setAuthError(err.message || 'Ocurrió un error en la autenticación.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (window.confirm('¿Deseas cerrar tu sesión actual?')) {
+      setLoading(true);
       try {
-        await clearAllDB();
-        setOrders([]);
-        setFilesLog([]);
-        setExpandedOrderId(null);
-        setCurrentPage(1);
+        await supabase.auth.signOut();
       } catch (err) {
         console.error(err);
-      } finally {
-        setLoading(false);
       }
     }
   };
@@ -344,7 +540,7 @@ function App() {
   // Financial Stats
   const totals = React.useMemo(() => {
     let usdTotal = 0;
-    let penTotal = 0; // Default local currency
+    let penTotal = 0;
     let copTotal = 0;
     
     let totalOrdersCount = allGroupedOrders.length;
@@ -353,7 +549,6 @@ function App() {
     
     const uniqueSuppliers = new Set(allGroupedOrders.map(o => o.proveedor)).size;
     
-    // Project totals
     const projectSpend = { LITORAL: 0, SB: 0, SUNNY: 0, OTHER: 0 };
 
     allGroupedOrders.forEach((o) => {
@@ -366,11 +561,10 @@ function App() {
       } else if (currency === 'COP') {
         copTotal += amt;
       } else {
-        penTotal += amt; // Assuming PEN or COP depending on Excel locale
+        penTotal += amt;
       }
 
-      // Convert to a single index currency for graphing comparison (using USD as baseline)
-      // Conversion rates: 1 USD = 3.8 PEN, 1 USD = 4000 COP
+      // Convert to a single index currency for graphing comparison (USD equivalent)
       let usdEquivalent = amt;
       if (currency === 'COP') {
         usdEquivalent = amt / 4000;
@@ -451,6 +645,195 @@ function App() {
     return 'var(--text-muted)';
   };
 
+  // RENDER: Auth Screen for Supabase mode (if not signed in)
+  if (isSupabaseConfigured && !session) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        backgroundColor: '#0b0f19',
+        fontFamily: 'var(--font-sans)',
+        color: '#f8fafc',
+        padding: '24px',
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        {/* Background Gradients */}
+        <div style={{
+          position: 'absolute',
+          top: '-10%',
+          left: '-10%',
+          width: '50%',
+          height: '50%',
+          background: 'radial-gradient(circle, rgba(37, 99, 235, 0.1) 0%, transparent 70%)',
+          zIndex: 0
+        }}></div>
+        <div style={{
+          position: 'absolute',
+          bottom: '-10%',
+          right: '-10%',
+          width: '50%',
+          height: '50%',
+          background: 'radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%)',
+          zIndex: 0
+        }}></div>
+
+        <div style={{
+          width: '100%',
+          maxWidth: '440px',
+          background: 'rgba(15, 23, 42, 0.75)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '24px',
+          padding: '40px',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+          zIndex: 1
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '32px' }}>
+            <div style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, #2563eb, #8b5cf6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)'
+            }}>
+              <BarChart2 size={24} />
+            </div>
+            <span style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px' }}>
+              Ecosistema Órdenes
+            </span>
+          </div>
+
+          <div style={{ marginBottom: '24px', textAlign: 'center' }}>
+            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>
+              {isRegistering ? 'Crear una cuenta nueva' : 'Bienvenido de nuevo'}
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+              {isRegistering ? 'Regístrate para colaborar en tiempo real.' : 'Inicia sesión para sincronizar órdenes en la nube.'}
+            </p>
+          </div>
+
+          {authError && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 16px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.2)',
+              borderRadius: '8px',
+              color: '#f87171',
+              fontSize: '13px',
+              marginBottom: '20px'
+            }}>
+              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Correo Electrónico</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <Mail size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
+                <input 
+                  type="email" 
+                  value={authEmail} 
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="tuemail@proyecto.com"
+                  style={{
+                    width: '100%',
+                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '8px',
+                    padding: '12px 16px 12px 40px',
+                    color: '#f8fafc',
+                    fontFamily: 'var(--font-sans)',
+                    outline: 'none',
+                    fontSize: '14px'
+                  }}
+                  required
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contraseña</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <Lock size={16} style={{ position: 'absolute', left: '14px', color: 'var(--text-muted)' }} />
+                <input 
+                  type="password" 
+                  value={authPassword} 
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{
+                    width: '100%',
+                    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '8px',
+                    padding: '12px 16px 12px 40px',
+                    color: '#f8fafc',
+                    fontFamily: 'var(--font-sans)',
+                    outline: 'none',
+                    fontSize: '14px'
+                  }}
+                  required
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              disabled={authLoading}
+              className="btn-primary" 
+              style={{
+                width: '100%',
+                padding: '12px',
+                borderRadius: '8px',
+                justifyContent: 'center',
+                marginTop: '12px'
+              }}
+            >
+              {authLoading ? 'Procesando...' : (isRegistering ? 'Registrarse' : 'Iniciar Sesión')}
+              <ArrowRight size={18} />
+            </button>
+          </form>
+
+          <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '13px' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {isRegistering ? '¿Ya tienes una cuenta?' : '¿No tienes una cuenta aún?'}
+            </span>{' '}
+            <button 
+              onClick={() => {
+                setIsRegistering(!isRegistering);
+                setAuthError(null);
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-primary)',
+                fontWeight: '600',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-sans)',
+                textDecoration: 'underline'
+              }}
+            >
+              {isRegistering ? 'Inicia sesión aquí' : 'Regístrate aquí'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Sidebar Navigation */}
@@ -495,6 +878,40 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
+          {isSupabaseConfigured && session && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: 'var(--color-primary-glow)', border: '1px solid var(--color-primary)', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center' }}>
+                  <User size={16} style={{ color: 'var(--color-primary)' }} />
+                </div>
+                <div style={{ overflow: 'hidden' }}>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-primary)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                    {session.user.email}
+                  </div>
+                  <span style={{ fontSize: '10px', color: 'var(--color-success)', fontWeight: '700', textTransform: 'uppercase' }}>Colaborador</span>
+                </div>
+              </div>
+              <button 
+                onClick={handleSignOut} 
+                style={{ 
+                  background: 'none', 
+                  border: 'none', 
+                  color: 'var(--color-danger)', 
+                  cursor: 'pointer', 
+                  fontSize: '12px', 
+                  fontWeight: '600', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px',
+                  padding: '4px'
+                }}
+              >
+                <LogOut size={14} />
+                <span>Cerrar Sesión</span>
+              </button>
+            </div>
+          )}
+
           <button onClick={toggleTheme} className="theme-toggle">
             {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
             <span>{themeMode === 'dark' ? 'Modo Claro' : 'Modo Oscuro'}</span>
@@ -517,18 +934,52 @@ function App() {
               Proyectos Litoral, SB y Sunny | {new Date().toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </p>
           </div>
-          {orders.length > 0 && activeTab === 'orders' && (
-            <button onClick={exportToCSV} className="btn-primary" id="btn-export-csv">
-              <Download size={18} />
-              <span>Exportar Vista CSV</span>
-            </button>
-          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            {/* Sync Cloud Badge */}
+            {isSupabaseConfigured ? (
+              <span className="badge" style={{ 
+                backgroundColor: 'rgba(16, 185, 129, 0.1)', 
+                color: '#10b981', 
+                border: '1px solid rgba(16, 185, 129, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '8px'
+              }}>
+                <Cloud size={16} />
+                <span style={{ fontWeight: '600', fontSize: '12px' }}>En Línea (Supabase)</span>
+              </span>
+            ) : (
+              <span className="badge" style={{ 
+                backgroundColor: 'rgba(59, 130, 246, 0.1)', 
+                color: '#3b82f6', 
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '8px'
+              }} title="Configura un archivo .env con credenciales de Supabase para activar la sincronización en la nube.">
+                <Database size={16} />
+                <span style={{ fontWeight: '600', fontSize: '12px' }}>Base de Datos Local (IndexedDB)</span>
+              </span>
+            )}
+
+            {orders.length > 0 && activeTab === 'orders' && (
+              <button onClick={exportToCSV} className="btn-primary" id="btn-export-csv">
+                <Download size={18} />
+                <span>Exportar Vista CSV</span>
+              </button>
+            )}
+          </div>
         </header>
 
         {loading ? (
           <div className="loader-wrapper">
             <div className="spinner"></div>
-            <p>Procesando información y cargando base de datos local...</p>
+            <p>Procesando información y conectando con el servidor...</p>
           </div>
         ) : (
           <>
@@ -540,7 +991,7 @@ function App() {
                     <Info size={48} style={{ margin: '0 auto 16px', color: 'var(--color-primary)' }} />
                     <h2 style={{ marginBottom: '8px' }}>No hay información registrada</h2>
                     <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
-                      Carga tus archivos de compras (OC) y servicios (OS) en la pestaña "Cargar Excel" para visualizar el dashboard.
+                      Carga tus archivos de compras (OC) y servicios (OS) en la pestaña "Cargar Excel" para comenzar.
                     </p>
                     <button onClick={() => setActiveTab('upload')} className="btn-primary" style={{ margin: '0 auto' }}>
                       <Upload size={18} />
@@ -561,7 +1012,7 @@ function App() {
                         <div className="metric-card" style={{ '--card-accent-color': 'var(--color-success)' }}>
                           <span className="metric-title">Gasto Total (COP)</span>
                           <span className="metric-value">{formatCurrency(totals.cop, 'COP')}</span>
-                          <span className="metric-sub">Órdenes en Pesos Colombianos</span>
+                          <span className="metric-sub">Pesos Colombianos acumulados</span>
                         </div>
                       )}
 
@@ -569,7 +1020,7 @@ function App() {
                         <div className="metric-card" style={{ '--card-accent-color': 'var(--color-warning)' }}>
                           <span className="metric-title">Gasto Total (Soles)</span>
                           <span className="metric-value">{formatCurrency(totals.pen, 'PEN')}</span>
-                          <span className="metric-sub">Órdenes en Soles Peruanos</span>
+                          <span className="metric-sub">Soles Peruanos acumulados</span>
                         </div>
                       )}
 
@@ -582,14 +1033,14 @@ function App() {
                       <div className="metric-card" style={{ '--card-accent-color': '#ec4899' }}>
                         <span className="metric-title">Proveedores</span>
                         <span className="metric-value">{totals.uniqueSuppliers}</span>
-                        <span className="metric-sub">Proveedores diferentes contratados</span>
+                        <span className="metric-sub">Proveedores diferentes registrados</span>
                       </div>
                     </section>
 
                     {/* Visual Charts */}
                     <div className="charts-grid">
                       
-                      {/* Project Spend Chart (CSS/SVG) */}
+                      {/* Project Spend Chart */}
                       <div className="chart-card">
                         <div className="chart-header">
                           <h3 className="chart-title">Distribución de Gasto por Proyecto (Equivalente en USD)</h3>
@@ -624,28 +1075,25 @@ function App() {
                         </div>
                       </div>
 
-                      {/* OC vs OS Pie Chart (CSS/SVG) */}
+                      {/* OC vs OS Pie Chart */}
                       <div className="chart-card">
                         <div className="chart-header">
                           <h3 className="chart-title">Proporción de Órdenes</h3>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '24px', flexGrow: 1 }}>
-                          {/* SVG Donut Chart */}
-                          {totals.ordersCount > 0 ? (
+                          {totals.ordersCount > 0 && (
                             (() => {
                               const ocPct = (totals.ocCount / totals.ordersCount) * 100;
                               const osPct = (totals.osCount / totals.ordersCount) * 100;
-                              const strokeDash = 251.2; // 2 * PI * r (r=40)
+                              const strokeDash = 251.2;
                               const ocOffset = strokeDash - (strokeDash * ocPct) / 100;
                               
                               return (
                                 <>
                                   <svg width="160" height="160" viewBox="0 0 100 100">
                                     <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--border-color)" strokeWidth="10" />
-                                    {/* OS Arc */}
                                     <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--color-sb)" strokeWidth="10" 
                                       strokeDasharray={strokeDash} strokeDashoffset={0} />
-                                    {/* OC Arc */}
                                     <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--color-litoral)" strokeWidth="10" 
                                       strokeDasharray={strokeDash} strokeDashoffset={ocOffset} transform="rotate(-90 50 50)" />
                                     <text x="50" y="55" textAnchor="middle" fill="var(--text-primary)" fontSize="14" fontWeight="800" fontFamily="var(--font-heading)">
@@ -672,7 +1120,7 @@ function App() {
                                 </>
                               );
                             })()
-                          ) : null}
+                          )}
                         </div>
                       </div>
                     </div>
@@ -754,7 +1202,7 @@ function App() {
                     <AlertTriangle size={48} style={{ margin: '0 auto 16px', color: 'var(--color-warning)' }} />
                     <h2>No se encontraron resultados</h2>
                     <p style={{ color: 'var(--text-secondary)' }}>
-                      Prueba a ajustar tus filtros de búsqueda o ingresa otra palabra clave.
+                      Prueba a ajustar tus filtros o ingresa otra palabra clave.
                     </p>
                   </div>
                 ) : (
@@ -823,7 +1271,7 @@ function App() {
                                 </td>
                               </tr>
 
-                              {/* Expanded Row with line items */}
+                              {/* Expanded Row */}
                               {isExpanded && (
                                 <tr className="details-row">
                                   <td colSpan="8">
@@ -831,7 +1279,7 @@ function App() {
                                       <div className="details-title">
                                         <span>Detalles de la Orden {order.nro_orden}</span>
                                         <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                                          Archivo origen: <code>{order.archivo_origen}</code>
+                                          Origen: <code>{order.archivo_origen}</code>
                                         </span>
                                       </div>
 
@@ -927,6 +1375,39 @@ function App() {
             {/* View 3: Upload Excel Manager */}
             {activeTab === 'upload' && (
               <div className="upload-container">
+                {/* Sync status alert */}
+                {syncStatus !== 'idle' && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 20px',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    backgroundColor: syncStatus === 'syncing' ? 'rgba(37, 99, 235, 0.1)' : syncStatus === 'success' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    border: '1px solid ' + (syncStatus === 'syncing' ? 'rgba(37, 99, 235, 0.2)' : syncStatus === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'),
+                    color: syncStatus === 'syncing' ? '#60a5fa' : syncStatus === 'success' ? '#34d399' : '#f87171'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {syncStatus === 'syncing' && <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px', animationDuration: '0.6s' }}></div>}
+                      {syncStatus === 'success' && <CheckCircle size={18} />}
+                      {syncStatus === 'error' && <AlertTriangle size={18} />}
+                      <span>
+                        {syncStatus === 'syncing' && 'Sincronizando archivos en la base de datos...'}
+                        {syncStatus === 'success' && 'Archivos cargados y sincronizados correctamente.'}
+                        {syncStatus === 'error' && 'Error al guardar los archivos en el servidor.'}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={() => setSyncStatus('idle')} 
+                      style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '12px', opacity: 0.8 }}
+                    >
+                      Descartar
+                    </button>
+                  </div>
+                )}
+
                 <div 
                   className={`dropzone ${dragActive ? 'active' : ''}`}
                   onDragEnter={handleDrag}
@@ -941,7 +1422,7 @@ function App() {
                     Arrastra tus archivos Excel aquí o <span>selecciónalos desde tu equipo</span>
                   </p>
                   <p className="dropzone-sub">
-                    Soporta múltiples archivos a la vez. Los nombres deben iniciar con "OC" para compras o "OS" para servicios.
+                    Soporta múltiples archivos. Los nombres deben iniciar con "OC" para compras o "OS" para servicios.
                   </p>
                   <input 
                     type="file" 
@@ -956,7 +1437,9 @@ function App() {
                 {filesLog.length > 0 && (
                   <div className="file-list-card">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
-                      <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '16px' }}>Archivos importados en base de datos</h3>
+                      <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '16px' }}>
+                        Archivos registrados {isSupabaseConfigured ? 'en la nube' : 'localmente'}
+                      </h3>
                       <button onClick={handleClearDatabase} className="btn-primary" style={{ backgroundColor: 'var(--color-danger)' }} id="btn-clear-db">
                         <Trash2 size={16} />
                         <span>Vaciar Ecosistema</span>
@@ -983,7 +1466,7 @@ function App() {
                               <CheckCircle size={16} />
                               <span>{file.rowCount} Registros</span>
                             </div>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Cargado: {file.uploadedAt}</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Sincronizado</span>
                           </div>
                         </div>
                       ))}
