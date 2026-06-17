@@ -493,9 +493,9 @@ function App() {
     row.precio_con_igv = calcPriceCon;
     row.precio_sin_igv = priceSin || (calcPriceCon / 1.18);
     
-    // El total del recurso DEBE ser Cantidad * Precio Unitario (tal como requirió el usuario)
-    // Se usa totalVal como último recurso si no hay precio.
-    row.parcial_final = (row.cantidad * calcPriceCon) || totalVal || 0;
+    // TOTAL ESTRICTO DEL RECURSO: Siempre multiplicar Cantidad x Precio Unitario. 
+    // Ignoramos cualquier columna de "Total" o "Parcial Final" del Excel porque traen el total de la orden.
+    row.parcial_final = row.cantidad * calcPriceCon;
     row.unidad = unitValue;
     row.gestor_compra = gestorValue;
     row.creado_por = creatorValue;
@@ -662,8 +662,19 @@ function App() {
     setLoading(true);
     try {
       if (isSupabaseConfigured && session) {
-        const { error } = await supabase.from('order_details').delete().neq('nro_orden', 'FORCE_DELETE_ALL');
-        if (error) throw error;
+        // Obtenemos todos los IDs para borrarlos en grupos (evita bloqueos de Supabase en borrado masivo)
+        const { data: allRows, error: fetchErr } = await supabase.from('order_details').select('id');
+        if (fetchErr) throw fetchErr;
+
+        if (allRows && allRows.length > 0) {
+          const ids = allRows.map(r => r.id);
+          const chunkSize = 200;
+          for (let i = 0; i < ids.length; i += chunkSize) {
+            const chunk = ids.slice(i, i + chunkSize);
+            const { error: delErr } = await supabase.from('order_details').delete().in('id', chunk);
+            if (delErr) throw delErr;
+          }
+        }
         
         // Also clear storage
         if (originFiles.length > 0) {
