@@ -390,8 +390,8 @@ function App() {
       }
 
       // === TOTALES ===
-      if (ck === 'parcial con i.g.v. detalle' || ck === 'parcial con igv' || 
-          ck === 'parcial final' || ck === 'valor total' || ck === 'total') {
+      // WARNING: DO NOT check for "valor total" or "total" here because those are often the document total, not the row total.
+      if (ck === 'parcial con i.g.v. detalle' || ck === 'parcial con igv' || ck === 'parcial final') {
         totalVal = parseNum(val);
       }
 
@@ -487,9 +487,15 @@ function App() {
     row.recurso_n3 = recursoN3Value;
 
     row.cantidad = qtyValue || 1;
-    row.parcial_final = totalVal || (priceCon * qtyValue) || (priceSin * 1.18 * qtyValue) || 0;
-    row.precio_con_igv = priceCon || (qtyValue ? row.parcial_final / qtyValue : 0);
-    row.precio_sin_igv = priceSin || (row.precio_con_igv / 1.18);
+    
+    // Calcular precios primero
+    const calcPriceCon = priceCon || (priceSin ? priceSin * 1.18 : 0);
+    row.precio_con_igv = calcPriceCon;
+    row.precio_sin_igv = priceSin || (calcPriceCon / 1.18);
+    
+    // El total del recurso DEBE ser Cantidad * Precio Unitario (tal como requirió el usuario)
+    // Se usa totalVal como último recurso si no hay precio.
+    row.parcial_final = (row.cantidad * calcPriceCon) || totalVal || 0;
     row.unidad = unitValue;
     row.gestor_compra = gestorValue;
     row.creado_por = creatorValue;
