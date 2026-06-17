@@ -186,7 +186,8 @@ function App() {
           .from('order_details')
           .select('*')
           .range(page * pageSize, (page + 1) * pageSize - 1)
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true });
 
         if (error) throw error;
         
@@ -729,6 +730,7 @@ function App() {
           items: []
         };
       }
+      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
       ordersMap[key].items.push({
         id: row.id,
         recurso: row.recurso,
@@ -736,11 +738,11 @@ function App() {
         cantidad: row.cantidad,
         precio_sin_igv: row.precio_sin_igv,
         precio_con_igv: row.precio_con_igv,
-        total: row.parcial_final,
+        total: itemSubtotal,
         cant_atendida: row.cant_atendida,
         cant_por_atender: row.cant_por_atender
       });
-      ordersMap[key].total_con_igv += (row.parcial_final || 0);
+      ordersMap[key].total_con_igv += itemSubtotal;
       ordersMap[key].saldo_por_pagar += (row.saldo_por_pagar || 0);
     });
     return Object.values(ordersMap).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
@@ -829,8 +831,9 @@ function App() {
       productMap[recurso].precios.push(precio);
       productMap[recurso].proveedores.add(row.proveedor || 'S/N');
       productMap[recurso].proyectos.add(sp);
-      productMap[recurso].totalComprado += row.parcial_final || 0;
-      productMap[recurso].cantidadTotal += row.cantidad || 0;
+      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      productMap[recurso].totalComprado += itemSubtotal;
+      productMap[recurso].cantidadTotal += Number(row.cantidad) || 0;
       productMap[recurso].ordenes.push({
         nro_orden: row.nro_orden,
         proveedor: row.proveedor,
@@ -881,9 +884,10 @@ function App() {
       // Check macro filter
       if (selectedMacro !== 'all' && macro !== selectedMacro) return;
 
+      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
       if (!subMap[sub]) subMap[sub] = { name: sub, count: 0, totalComprado: 0 };
       subMap[sub].count++;
-      subMap[sub].totalComprado += row.parcial_final || 0;
+      subMap[sub].totalComprado += itemSubtotal;
     });
     return Object.values(subMap).sort((a, b) => b.totalComprado - a.totalComprado);
   }, [orders, logisticProject, logisticType, selectedMacro]);
@@ -901,9 +905,10 @@ function App() {
       // Ensure macro is one of the valid ones
       if (!VALID_MACROS.includes(macro)) return;
 
+      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
       if (!macMap[macro]) macMap[macro] = { name: macro, count: 0, totalComprado: 0 };
       macMap[macro].count++;
-      macMap[macro].totalComprado += row.parcial_final || 0;
+      macMap[macro].totalComprado += itemSubtotal;
     });
     return Object.values(macMap).sort((a, b) => a.name.localeCompare(b.name));
   }, [orders, logisticProject, logisticType]);
