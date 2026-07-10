@@ -91,6 +91,10 @@ function App() {
   const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'syncing' | 'success' | 'error'
   const fileInputRef = useRef(null);
 
+  // Financial Variables
+  const [baseCurrency, setBaseCurrency] = useState('PEN');
+  const [exchangeRate, setExchangeRate] = useState(3.80);
+
   const isAdmin = session?.user?.email === 'yleon@padovasac.com' || session?.user?.email === 'yrvingleon@hotmail.com' || session?.user?.email === 'admin@padova.com';
   const userEmail = session?.user?.email || 'Invitado';
 
@@ -326,7 +330,8 @@ function App() {
     const row = {};
     const keys = Object.keys(rawRow);
     
-    let resourceName = '', qtyValue = 0, priceSin = 0, priceCon = 0, totalVal = 0;
+    let resourceName = '', qtyValue = 0, priceSin = 0, priceCon = 0;
+    let totalConIgvDetalle = null, parcialFinalVal = null, parcialSinIgvVal = null;
     let orderNum = '', providerName = '', rucValue = '', dateValue = '', statusValue = '', currencyValue = '';
     let unitValue = 'UND', gestorValue = '', creatorValue = '', obsValue = '', fechaCreacionValue = '';
     let cantAtendidaValue = 0, cantPorAtenderValue = 0, estadoFacturacionValue = '', saldoPorPagarValue = 0;
@@ -392,8 +397,12 @@ function App() {
 
       // === TOTALES ===
       // WARNING: DO NOT check for "valor total" or "total" here because those are often the document total, not the row total.
-      if (ck === 'parcial con i.g.v. detalle' || ck === 'parcial con igv' || ck === 'parcial final') {
-        totalVal = parseNum(val);
+      if (ck === 'parcial con i.g.v. detalle' || ck === 'parcial con igv' || ck.startsWith('parcial con i.g.v') || ck.startsWith('parcial con igv')) {
+        totalConIgvDetalle = parseNum(val);
+      } else if (ck === 'parcial final') {
+        parcialFinalVal = parseNum(val);
+      } else if (ck === 'parcial sin i.g.v. detalle' || ck === 'parcial sin igv' || ck.startsWith('parcial sin i.g.v') || ck.startsWith('parcial sin igv')) {
+        parcialSinIgvVal = parseNum(val);
       }
 
       // === UNIDAD ===
@@ -487,16 +496,27 @@ function App() {
     row.recurso_n2 = recursoN2Value || 'OTROS / VARIOS';
     row.recurso_n3 = recursoN3Value;
 
-    row.cantidad = qtyValue || 1;
+    row.cantidad = qtyValue;
     
     // Calcular precios primero
     const calcPriceCon = priceCon || (priceSin ? priceSin * 1.18 : 0);
     row.precio_con_igv = calcPriceCon;
     row.precio_sin_igv = priceSin || (calcPriceCon / 1.18);
     
-    // TOTAL ESTRICTO DEL RECURSO: Siempre multiplicar Cantidad x Precio Unitario. 
-    // Ignoramos cualquier columna de "Total" o "Parcial Final" del Excel porque traen el total de la orden.
-    row.parcial_final = row.cantidad * calcPriceCon;
+    // Choose the best subtotal
+    let totalVal = null;
+    if (totalConIgvDetalle !== null && totalConIgvDetalle !== 0) {
+      totalVal = totalConIgvDetalle;
+    } else if (parcialFinalVal !== null) {
+      totalVal = parcialFinalVal;
+    } else if (totalConIgvDetalle !== null) {
+      totalVal = totalConIgvDetalle;
+    }
+
+    // TOTAL ESTRICTO DEL RECURSO: Priorizar el subtotal con IGV / parcial final del Excel.
+    // Si no está disponible, calculamos multiplicando Cantidad x Precio con IGV.
+    row.parcial_final = (totalVal !== null) ? totalVal : (row.cantidad * calcPriceCon);
+    row.parcial_sin_igv = (parcialSinIgvVal !== null) ? parcialSinIgvVal : (row.cantidad * row.precio_sin_igv);
     row.unidad = unitValue;
     row.gestor_compra = gestorValue;
     row.creado_por = creatorValue;
@@ -610,7 +630,7 @@ function App() {
           const SUPABASE_COLS = [
             'proyecto','tipo_orden','nro_orden','proveedor','ruc','fecha','estado','moneda',
             'recurso','codigo_recurso','recurso_n1','recurso_n2','recurso_n3',
-            'cantidad','precio_sin_igv','precio_con_igv','parcial_final','unidad',
+            'cantidad','precio_sin_igv','precio_con_igv','parcial_final','parcial_sin_igv','unidad',
             'gestor_compra','creado_por','fecha_creacion','observacion','archivo_origen',
             'cant_atendida','cant_por_atender','estado_facturacion','saldo_por_pagar',
             'fecha_entrega','aprobador','empresa_proyecto','pedidos','anio_mes','solicitante','user_id'
@@ -630,7 +650,23 @@ function App() {
               .from('order_details')
               .insert(chunk);
 
-            if (insertError) throw insertError;
+            if (insertError) {
+              // Si falla por no existir la columna parcial_sin_igv, lo reintentamos sin ella de forma segura
+              if (insertError.message.includes('parcial_sin_igv') || insertError.code === '42703') {
+                console.warn('La columna parcial_sin_igv no existe en la base de datos Supabase, reintentando sin ella...');
+                const fallbackChunk = chunk.map(row => {
+                  const copy = { ...row };
+                  delete copy.parcial_sin_igv;
+                  return copy;
+                });
+                const { error: retryError } = await supabase
+                  .from('order_details')
+                  .insert(fallbackChunk);
+                if (retryError) throw retryError;
+              } else {
+                throw insertError;
+              }
+            }
           }
         }
         
@@ -731,6 +767,7 @@ function App() {
         };
       }
       const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      const itemSubtotalSinIgv = (Number(row.cantidad) || 0) * (Number(row.precio_sin_igv) || 0);
       ordersMap[key].items.push({
         id: row.id,
         recurso: row.recurso,
@@ -739,6 +776,7 @@ function App() {
         precio_sin_igv: row.precio_sin_igv,
         precio_con_igv: row.precio_con_igv,
         total: itemSubtotal,
+        parcial_sin_igv: itemSubtotalSinIgv,
         cant_atendida: row.cant_atendida,
         cant_por_atender: row.cant_por_atender
       });
@@ -748,18 +786,27 @@ function App() {
     return Object.values(ordersMap).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
   }, [orders]);
 
-  const dashboardStats = useMemo(() => {
+    const dashboardStats = useMemo(() => {
     const calculateMetrics = (orderList) => {
-      const totalSpendUSD = orderList.reduce((acc, o) => {
+      const totalSpendTarget = orderList.reduce((acc, o) => {
         const val = o.total_con_igv || 0;
-        return acc + (o.moneda === 'USD' ? val : val / 3.8);
+        let converted = val;
+        if (o.moneda !== baseCurrency) {
+          if (baseCurrency === 'PEN' && o.moneda === 'USD') converted = val * exchangeRate;
+          else if (baseCurrency === 'USD' && o.moneda === 'PEN') converted = val / exchangeRate;
+        }
+        return acc + converted;
       }, 0);
 
       const providerSpend = {};
       orderList.forEach(o => {
         const val = o.total_con_igv || 0;
-        const valUSD = o.moneda === 'USD' ? val : val / 3.8;
-        providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + valUSD;
+        let converted = val;
+        if (o.moneda !== baseCurrency) {
+          if (baseCurrency === 'PEN' && o.moneda === 'USD') converted = val * exchangeRate;
+          else if (baseCurrency === 'USD' && o.moneda === 'PEN') converted = val / exchangeRate;
+        }
+        providerSpend[o.proveedor] = (providerSpend[o.proveedor] || 0) + converted;
       });
 
       const topProviders = Object.entries(providerSpend)
@@ -771,11 +818,15 @@ function App() {
       orderList.forEach(o => {
         const sp = getSimpleProject(o.proyecto);
         const val = o.total_con_igv || 0;
-        const valUSD = o.moneda === 'USD' ? val : val / 3.8;
-        projectSpend[sp] = (projectSpend[sp] || 0) + valUSD;
+        let converted = val;
+        if (o.moneda !== baseCurrency) {
+          if (baseCurrency === 'PEN' && o.moneda === 'USD') converted = val * exchangeRate;
+          else if (baseCurrency === 'USD' && o.moneda === 'PEN') converted = val / exchangeRate;
+        }
+        projectSpend[sp] = (projectSpend[sp] || 0) + converted;
       });
 
-      return { totalSpendUSD, topProviders, projectSpend };
+      return { totalSpendTarget, topProviders, projectSpend };
     };
 
     const ocOrders = allGroupedOrders.filter(o => o.tipo_orden === 'OC' && (selectedProject === 'all' || getSimpleProject(o.proyecto) === selectedProject));
@@ -787,7 +838,7 @@ function App() {
       totalProviders: new Set(allGroupedOrders.map(o => o.proveedor)).size,
       totalCount: allGroupedOrders.length
     };
-  }, [allGroupedOrders, selectedProject]);
+  }, [allGroupedOrders, selectedProject, baseCurrency, exchangeRate]);
 
   // === LOGISTICS ANALYSIS ENGINE ===
   const logisticsData = useMemo(() => {
@@ -818,7 +869,7 @@ function App() {
           macro,
           sub,
           unidad: row.unidad || 'UND',
-          moneda: row.moneda,
+          moneda: row.moneda, // Primary reference
           precios: [],
           proveedores: new Set(),
           proyectos: new Set(),
@@ -828,10 +879,15 @@ function App() {
         };
       }
       
-      productMap[recurso].precios.push(precio);
+      productMap[recurso].precios.push({ valor: precio, moneda: row.moneda });
       productMap[recurso].proveedores.add(row.proveedor || 'S/N');
       productMap[recurso].proyectos.add(sp);
-      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      
+      let itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      if (row.moneda !== baseCurrency) {
+        if (baseCurrency === 'PEN' && row.moneda === 'USD') itemSubtotal *= exchangeRate;
+        else if (baseCurrency === 'USD' && row.moneda === 'PEN') itemSubtotal /= exchangeRate;
+      }
       productMap[recurso].totalComprado += itemSubtotal;
       productMap[recurso].cantidadTotal += Number(row.cantidad) || 0;
       productMap[recurso].ordenes.push({
@@ -846,7 +902,18 @@ function App() {
     });
 
     const products = Object.values(productMap).map(p => {
-      const precios = p.precios.filter(v => v > 0);
+      // Find majority currency for this resource
+      const counts = { PEN: 0, USD: 0 };
+      p.precios.forEach(pr => counts[pr.moneda] = (counts[pr.moneda] || 0) + 1);
+      const majorityCurrency = counts.PEN >= counts.USD ? 'PEN' : 'USD';
+      
+      // Filter prices to ONLY the majority currency to calculate variation accurately
+      const precios = p.precios
+        .filter(pr => pr.moneda === majorityCurrency && pr.valor > 0)
+        .map(pr => pr.valor);
+        
+      p.moneda = majorityCurrency; // override display currency to the majority one
+
       return {
         ...p,
         proveedores: [...p.proveedores],
@@ -856,7 +923,7 @@ function App() {
         precioMax: precios.length ? Math.max(...precios) : 0,
         precioPromedio: precios.length ? precios.reduce((a, b) => a + b, 0) / precios.length : 0,
         variacionPct: precios.length > 1 ? ((Math.max(...precios) - Math.min(...precios)) / Math.min(...precios) * 100) : 0,
-        numOrdenes: precios.length
+        numOrdenes: p.precios.length // use original length for total orders
       };
     });
 
@@ -870,7 +937,7 @@ function App() {
     else if (logisticSort === 'precio_min') filtered.sort((a, b) => a.precioMin - b.precioMin);
 
     return filtered;
-  }, [orders, logisticProject, logisticType, logisticSearch, logisticSort, selectedCategory, selectedMacro]);
+  }, [orders, logisticProject, logisticType, logisticSearch, logisticSort, selectedCategory, selectedMacro, baseCurrency, exchangeRate]);
 
   const categorySummary = useMemo(() => {
     const subMap = {};
@@ -884,13 +951,17 @@ function App() {
       // Check macro filter
       if (selectedMacro !== 'all' && macro !== selectedMacro) return;
 
-      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      let itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      if (row.moneda !== baseCurrency) {
+        if (baseCurrency === 'PEN' && row.moneda === 'USD') itemSubtotal *= exchangeRate;
+        else if (baseCurrency === 'USD' && row.moneda === 'PEN') itemSubtotal /= exchangeRate;
+      }
       if (!subMap[sub]) subMap[sub] = { name: sub, count: 0, totalComprado: 0 };
       subMap[sub].count++;
       subMap[sub].totalComprado += itemSubtotal;
     });
     return Object.values(subMap).sort((a, b) => b.totalComprado - a.totalComprado);
-  }, [orders, logisticProject, logisticType, selectedMacro]);
+  }, [orders, logisticProject, logisticType, selectedMacro, baseCurrency, exchangeRate]);
 
   const macroSummary = useMemo(() => {
     const macMap = {};
@@ -905,13 +976,17 @@ function App() {
       // Ensure macro is one of the valid ones
       if (!VALID_MACROS.includes(macro)) return;
 
-      const itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      let itemSubtotal = (Number(row.cantidad) || 0) * (Number(row.precio_con_igv) || 0);
+      if (row.moneda !== baseCurrency) {
+        if (baseCurrency === 'PEN' && row.moneda === 'USD') itemSubtotal *= exchangeRate;
+        else if (baseCurrency === 'USD' && row.moneda === 'PEN') itemSubtotal /= exchangeRate;
+      }
       if (!macMap[macro]) macMap[macro] = { name: macro, count: 0, totalComprado: 0 };
       macMap[macro].count++;
       macMap[macro].totalComprado += itemSubtotal;
     });
     return Object.values(macMap).sort((a, b) => a.name.localeCompare(b.name));
-  }, [orders, logisticProject, logisticType]);
+  }, [orders, logisticProject, logisticType, baseCurrency, exchangeRate]);
 
   // Export to XLSX function
   const exportToXLSX = (data, filename, sheetName = 'Reporte') => {
@@ -1125,7 +1200,7 @@ function App() {
         <div className="metrics-grid">
           <div className="metric-card" style={{ '--card-accent-color': accentColor }}>
             <span className="metric-title">Inversión {type}</span>
-            <span className="metric-value">{formatCurrency(stats.totalSpendUSD, 'USD')} Eq.</span>
+            <span className="metric-value">{formatCurrency(stats.totalSpendTarget, baseCurrency)} Eq.</span>
             <span className="metric-sub">Consolidado del proyecto seleccionado</span>
           </div>
           <div className="metric-card" style={{ '--card-accent-color': 'var(--color-success)' }}>
@@ -1174,7 +1249,9 @@ function App() {
                     <Tooltip 
                       cursor={{ fill: 'rgba(255,255,255,0.02)' }}
                       contentStyle={{ backgroundColor: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px', fontSize: '11px' }}
-                      formatter={(val) => [formatCurrency(val, 'USD'), 'Gasto Eq.']}
+                      itemStyle={{ color: '#fff' }}
+                      labelStyle={{ color: '#94a3b8', fontWeight: 'bold' }}
+                      formatter={(val) => [formatCurrency(val, baseCurrency), 'Total']}
                     />
                     <Bar dataKey="val" radius={[0, 2, 2, 0]} barSize={12}>
                       {stats.topProviders.map((entry, index) => (
@@ -1193,7 +1270,7 @@ function App() {
               <h3 className="chart-title" style={{ fontSize: '13px', textTransform: 'uppercase' }}>Distribución</h3>
               <Activity size={14} style={{ color: 'var(--text-muted)' }} />
             </div>
-            <div style={{ height: '140px', width: '100%' }}>
+            <div style={{ height: '180px', width: '100%' }}>
               {Object.entries(stats.projectSpend).every(([_, v]) => v === 0) ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '12px' }}>Sin información</div>
               ) : (
@@ -1204,9 +1281,9 @@ function App() {
                         .filter(([proj, val]) => val > 0 && proj !== 'OTRO')
                         .map(([name, value]) => ({ name, value }))}
                       cx="50%"
-                      cy="50%"
-                      innerRadius={35}
-                      outerRadius={50}
+                      cy="45%"
+                      innerRadius={45}
+                      outerRadius={65}
                       paddingAngle={5}
                       dataKey="value"
                     >
@@ -1217,8 +1294,15 @@ function App() {
                         ))}
                     </Pie>
                     <Tooltip 
-                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px', fontSize: '11px' }}
-                      formatter={(val) => [formatCurrency(val, 'USD'), 'Monto']}
+                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid var(--border-color)', borderRadius: '8px', fontSize: '11px', color: '#fff' }}
+                      itemStyle={{ color: '#fff' }}
+                      labelStyle={{ color: '#94a3b8', fontWeight: 'bold' }}
+                      formatter={(val) => [formatCurrency(val, baseCurrency), 'Monto']}
+                    />
+                    <Legend 
+                      verticalAlign="bottom" 
+                      height={20} 
+                      wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -1339,35 +1423,71 @@ function App() {
                                 </div>
 
                                 <table className="items-table">
-                                  <thead>
-                                    <tr>
-                                      <th>Descripción Recurso</th>
-                                      <th style={{ textAlign: 'center' }}>Und.</th>
-                                      <th style={{ textAlign: 'right' }}>Cantidad</th>
-                                      <th style={{ textAlign: 'right' }}>P. Unit c/IGV</th>
-                                      <th style={{ textAlign: 'right' }}>Total</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {order.items
-                                      .filter(item => String(item.recurso).toLowerCase().includes(innerSearch.toLowerCase()))
-                                      .map((item, idx) => (
-                                      <tr key={item.id || idx}>
-                                        <td style={{ fontWeight: '600', padding: '12px', lineHeight: '1.4', whiteSpace: 'normal' }}>{item.recurso}</td>
-                                        <td style={{ textAlign: 'center' }}>{item.unidad}</td>
-                                        <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
-                                        <td style={{ textAlign: 'right' }}>
-                                          <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
-                                          {item.precio_con_igv.toFixed(2)}
-                                        </td>
-                                        <td style={{ textAlign: 'right', fontWeight: '700' }}>
-                                          <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
-                                          {item.total.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                   <thead>
+                                     <tr>
+                                       <th>Descripción Recurso</th>
+                                       <th style={{ textAlign: 'center' }}>Und.</th>
+                                       <th style={{ textAlign: 'right' }}>Cantidad</th>
+                                       <th style={{ textAlign: 'right' }}>P.U. sin IGV</th>
+                                       <th style={{ textAlign: 'right' }}>P.U. con IGV</th>
+                                       <th style={{ textAlign: 'center' }}>IGV (%)</th>
+                                       <th style={{ textAlign: 'right' }}>Parcial sin IGV</th>
+                                       <th style={{ textAlign: 'right' }}>Parcial con IGV</th>
+                                     </tr>
+                                   </thead>
+                                   <tbody>
+                                     {order.items
+                                       .filter(item => String(item.recurso).toLowerCase().includes(innerSearch.toLowerCase()))
+                                       .map((item, idx) => {
+                                         // Calcular tasa de IGV dinámicamente por item
+                                         let igvRate = 0.18; // Por defecto 18%
+                                         if (item.precio_sin_igv > 0) {
+                                           const calculatedRate = (item.precio_con_igv / item.precio_sin_igv) - 1;
+                                           igvRate = Math.round(calculatedRate * 100) / 100;
+                                           if (igvRate < 0.01) igvRate = 0;
+                                         } else if (item.precio_con_igv > 0) {
+                                           if (Math.abs(item.precio_con_igv - item.precio_sin_igv) < 0.01) {
+                                             igvRate = 0;
+                                           }
+                                         } else {
+                                           igvRate = 0;
+                                         }
+
+                                         const igvPercent = `${Math.round(igvRate * 100)}%`;
+                                         
+                                         // Calcular subtotales multiplicando cantidad por precio unitario
+                                         const totalSinIgv = item.cantidad * item.precio_sin_igv;
+                                         const totalConIgv = item.cantidad * item.precio_con_igv;
+
+                                         return (
+                                           <tr key={item.id || idx}>
+                                             <td style={{ fontWeight: '600', padding: '12px', lineHeight: '1.4', whiteSpace: 'normal' }}>{item.recurso}</td>
+                                             <td style={{ textAlign: 'center' }}>{item.unidad}</td>
+                                             <td style={{ textAlign: 'right' }}>{item.cantidad.toLocaleString()}</td>
+                                             <td style={{ textAlign: 'right' }}>
+                                               <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                               {item.precio_sin_igv.toFixed(2)}
+                                             </td>
+                                             <td style={{ textAlign: 'right' }}>
+                                               <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                               {item.precio_con_igv.toFixed(2)}
+                                             </td>
+                                             <td style={{ textAlign: 'center', fontWeight: '500', color: igvRate > 0 ? '#ffb300' : 'var(--text-muted)' }}>
+                                               {igvPercent}
+                                             </td>
+                                             <td style={{ textAlign: 'right' }}>
+                                               <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                               {totalSinIgv.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
+                                             </td>
+                                             <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                                               <span style={{ fontSize: '10px', opacity: 0.6, marginRight: '4px' }}>{order.moneda}</span>
+                                               {totalConIgv.toLocaleString('es-PE', { minimumFractionDigits: 2 })}
+                                             </td>
+                                           </tr>
+                                         );
+                                       })}
+                                   </tbody>
+                                 </table>
                               </div>
                             </td>
                           </tr>
@@ -1551,7 +1671,6 @@ function App() {
                     <th style={{ textAlign: 'right' }}>Precio Mín c/IGV</th>
                     <th style={{ textAlign: 'right' }}>Precio Máx c/IGV</th>
                     <th style={{ textAlign: 'center' }}>Variación</th>
-                    <th style={{ textAlign: 'right' }}>Total Invertido</th>
                     <th style={{ textAlign: 'center' }}>Ver</th>
                   </tr>
                 </thead>
@@ -1588,9 +1707,6 @@ function App() {
                               {product.variacionPct.toFixed(1)}%
                             </span>
                           </td>
-                          <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
-                            {formatCurrency(product.totalComprado, 'PEN')}
-                          </td>
                           <td style={{ textAlign: 'center' }}>
                             <button onClick={() => setExpandedOrderId(isExpanded ? null : `log-${product.recurso}`)}
                               className="btn-outline" style={{ padding: '4px 8px', border: 'none' }}>
@@ -1600,7 +1716,7 @@ function App() {
                         </tr>
                         {isExpanded && (
                           <tr className="details-row">
-                            <td colSpan="8">
+                            <td colSpan="7">
                               <div className="details-wrapper" style={{ padding: '0 20px 20px' }}>
                                 <table className="items-table" style={{ marginTop: '0' }}>
                                   <thead>
@@ -1902,6 +2018,29 @@ function App() {
                 <option value="SUNNY">SUNNY</option>
               </select>
             )}
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <select 
+                className="filter-select"
+                value={baseCurrency}
+                onChange={(e) => setBaseCurrency(e.target.value)}
+                style={{ height: '40px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', fontWeight: '600' }}
+              >
+                <option value="PEN">Moneda: PEN</option>
+                <option value="USD">Moneda: USD</option>
+              </select>
+              <div style={{ display: 'flex', alignItems: 'center', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px', height: '40px', padding: '0 12px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginRight: '6px', fontWeight: '600' }}>TC:</span>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(parseFloat(e.target.value) || 1)}
+                  style={{ width: '50px', background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', fontWeight: 'bold' }}
+                />
+              </div>
+            </div>
+
 
             {isSupabaseConfigured ? (
               <span className="badge" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 129px', borderRadius: '8px' }}>

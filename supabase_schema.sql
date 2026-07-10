@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS public.order_details (
     precio_sin_igv NUMERIC DEFAULT 0,
     precio_con_igv NUMERIC DEFAULT 0,
     parcial_final NUMERIC DEFAULT 0,
+    parcial_sin_igv NUMERIC DEFAULT 0,
     unidad TEXT,
     gestor_compra TEXT,
     creado_por TEXT,
@@ -63,6 +64,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_details' AND column_name='anio_mes') THEN
         ALTER TABLE public.order_details ADD COLUMN anio_mes TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_details' AND column_name='parcial_sin_igv') THEN
+        ALTER TABLE public.order_details ADD COLUMN parcial_sin_igv NUMERIC DEFAULT 0;
     END IF;
 END $$;
 
