@@ -7,6 +7,7 @@ export default [
   { ignores: ['dist'] },
   {
     files: ['**/*.{js,jsx}'],
+    ignores: ['api/**'],
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
@@ -28,6 +29,20 @@ export default [
         { allowConstantExport: true },
       ],
       'no-unused-vars': 'off', // Turn off unused vars for now to ensure a clean Vercel build
+    },
+  },
+  {
+    files: ['api/**/*.js', 'vite.config.js', 'eslint.config.js'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.node,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      ...js.configs.recommended.rules,
     },
   },
 ]

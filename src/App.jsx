@@ -29,10 +29,19 @@ import {
   Trash2,
   Cloud
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { initDB, saveOrders as saveOrdersLocal, getOrders as getOrdersLocal, clearAllDB as clearLocalDB } from './db';
 import './App.css';
+
+// Únicos estados operativos válidos: las órdenes en cualquier otro estado
+// (Anulado, Registrado, Por Aprobar, etc.) no deben contarse en ningún KPI, gráfico o tabla.
+const ESTADOS_VISIBLES = ['APROBADO', 'EN SUBCONTRATO', 'PARCIALMENTE EN ALMACEN', 'EN ALMACEN'];
+
+const normalizeEstado = (estado) => String(estado || '')
+  .normalize('NFD')
+  .replace(/[̀-ͯ]/g, '')
+  .toUpperCase()
+  .trim();
 
 // Chart components from Recharts
 import { 
@@ -93,7 +102,7 @@ function App() {
 
   // Financial Variables
   const [baseCurrency, setBaseCurrency] = useState('PEN');
-  const [exchangeRate, setExchangeRate] = useState(3.80);
+  const [exchangeRate, setExchangeRate] = useState(3.40);
 
   const isAdmin = session?.user?.email === 'yleon@padovasac.com' || session?.user?.email === 'yrvingleon@hotmail.com' || session?.user?.email === 'admin@padova.com';
   const userEmail = session?.user?.email || 'Invitado';
@@ -543,6 +552,7 @@ function App() {
     setSyncStatus('syncing');
     setLoading(true);
     const parsedRowsAllFiles = [];
+    const XLSX = await import('xlsx');
 
     for (const file of filesList) {
       const fn = file.name.toUpperCase();
@@ -735,10 +745,16 @@ function App() {
     }
   };
 
+  // Solo se consideran órdenes en estos 4 estados operativos en todo el sistema
+  // (excluye Anulado, Registrado, Por Aprobar, o cualquier otro estado)
+  const visibleOrders = useMemo(() => {
+    return orders.filter(o => ESTADOS_VISIBLES.includes(normalizeEstado(o.estado)));
+  }, [orders]);
+
   // Group items back into orders for display
   const allGroupedOrders = useMemo(() => {
     const ordersMap = {};
-    orders.forEach(row => {
+    visibleOrders.forEach(row => {
       const key = `${row.nro_orden}-${getSimpleProject(row.proyecto)}-${row.tipo_orden}`;
       if (!ordersMap[key]) {
         ordersMap[key] = {
@@ -784,7 +800,7 @@ function App() {
       ordersMap[key].saldo_por_pagar += (row.saldo_por_pagar || 0);
     });
     return Object.values(ordersMap).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-  }, [orders]);
+  }, [visibleOrders]);
 
     const dashboardStats = useMemo(() => {
     const calculateMetrics = (orderList) => {
@@ -843,8 +859,8 @@ function App() {
   // === LOGISTICS ANALYSIS ENGINE ===
   const logisticsData = useMemo(() => {
     const productMap = {};
-    
-    orders.forEach(row => {
+
+    visibleOrders.forEach(row => {
       const sp = getSimpleProject(row.proyecto);
       if (logisticProject !== 'all' && sp !== logisticProject) return;
       if (logisticType !== 'all' && row.tipo_orden !== logisticType) return;
@@ -937,11 +953,11 @@ function App() {
     else if (logisticSort === 'precio_min') filtered.sort((a, b) => a.precioMin - b.precioMin);
 
     return filtered;
-  }, [orders, logisticProject, logisticType, logisticSearch, logisticSort, selectedCategory, selectedMacro, baseCurrency, exchangeRate]);
+  }, [visibleOrders, logisticProject, logisticType, logisticSearch, logisticSort, selectedCategory, selectedMacro, baseCurrency, exchangeRate]);
 
   const categorySummary = useMemo(() => {
     const subMap = {};
-    orders.forEach(row => {
+    visibleOrders.forEach(row => {
       const sp = getSimpleProject(row.proyecto);
       if (logisticProject !== 'all' && sp !== logisticProject) return;
       if (logisticType !== 'all' && row.tipo_orden !== logisticType) return;
@@ -961,13 +977,13 @@ function App() {
       subMap[sub].totalComprado += itemSubtotal;
     });
     return Object.values(subMap).sort((a, b) => b.totalComprado - a.totalComprado);
-  }, [orders, logisticProject, logisticType, selectedMacro, baseCurrency, exchangeRate]);
+  }, [visibleOrders, logisticProject, logisticType, selectedMacro, baseCurrency, exchangeRate]);
 
   const macroSummary = useMemo(() => {
     const macMap = {};
     const VALID_MACROS = ['1. MATERIALES', '2. SUBCONTRATOS Y SERVICIOS', '3. ACTIVOS'];
-    
-    orders.forEach(row => {
+
+    visibleOrders.forEach(row => {
       const sp = getSimpleProject(row.proyecto);
       if (logisticProject !== 'all' && sp !== logisticProject) return;
       if (logisticType !== 'all' && row.tipo_orden !== logisticType) return;
@@ -986,10 +1002,11 @@ function App() {
       macMap[macro].totalComprado += itemSubtotal;
     });
     return Object.values(macMap).sort((a, b) => a.name.localeCompare(b.name));
-  }, [orders, logisticProject, logisticType, baseCurrency, exchangeRate]);
+  }, [visibleOrders, logisticProject, logisticType, baseCurrency, exchangeRate]);
 
-  // Export to XLSX function
-  const exportToXLSX = (data, filename, sheetName = 'Reporte') => {
+  // Export to XLSX function (carga xlsx bajo demanda para no engordar el bundle inicial)
+  const exportToXLSX = async (data, filename, sheetName = 'Reporte') => {
+    const XLSX = await import('xlsx');
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
@@ -1198,11 +1215,6 @@ function App() {
         
         {/* KPI Row */}
         <div className="metrics-grid">
-          <div className="metric-card" style={{ '--card-accent-color': accentColor }}>
-            <span className="metric-title">Inversión {type}</span>
-            <span className="metric-value">{formatCurrency(stats.totalSpendTarget, baseCurrency)} Eq.</span>
-            <span className="metric-sub">Consolidado del proyecto seleccionado</span>
-          </div>
           <div className="metric-card" style={{ '--card-accent-color': 'var(--color-success)' }}>
             <span className="metric-title">Nro de Órdenes</span>
             <span className="metric-value">{projectFiltered.length}</span>
@@ -1335,10 +1347,10 @@ function App() {
               <select className="filter-select" value={selectedStatus}
                 onChange={(e) => { setSelectedStatus(e.target.value); setCurrentPage(1); }}>
                 <option value="all">Cualquier Estado</option>
-                <option value="Emitido">Emitido</option>
                 <option value="Aprobado">Aprobado</option>
+                <option value="En Subcontrato">En Subcontrato</option>
+                <option value="Parcialmente en Almacén">Parcialmente en Almacén</option>
                 <option value="En Almacén">En Almacén</option>
-                <option value="Anulado">Anulado</option>
               </select>
             </div>
           </section>
@@ -1775,6 +1787,27 @@ function App() {
   };
 
   // === RENDER USERS TAB ===
+  const handleInviteUser = async () => {
+    const email = window.prompt('Ingresa el correo del usuario a invitar:');
+    if (!email) return;
+
+    try {
+      const response = await fetch('/api/invite-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({ email })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Error al invitar usuario');
+      alert(`Invitación enviada a ${email}.`);
+    } catch (err) {
+      alert('Error al invitar usuario: ' + err.message);
+    }
+  };
+
   const renderUsersTab = () => {
     return (
       <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -1782,7 +1815,7 @@ function App() {
           <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', margin: 0 }}>
             Gestión de Usuarios y Accesos
           </h3>
-          <button className="btn-primary" onClick={() => alert('Función para invitar nuevos usuarios (requiere backend)')}>
+          <button className="btn-primary" onClick={handleInviteUser}>
             <Users size={18} />
             <span>Invitar Usuario</span>
           </button>
@@ -1803,7 +1836,7 @@ function App() {
             </div>
             
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0 8px' }}>
-              Nota: En esta versión beta, el acceso está limitado a la lista blanca de correos definidos en el sistema.
+              Nota: Solo un superadministrador puede invitar nuevos usuarios. El invitado recibe un correo de Supabase para crear su contraseña.
             </p>
           </div>
 
