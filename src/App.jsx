@@ -37,6 +37,14 @@ import './App.css';
 // (Anulado, Registrado, Por Aprobar, etc.) no deben contarse en ningún KPI, gráfico o tabla.
 const ESTADOS_VISIBLES = ['APROBADO', 'EN SUBCONTRATO', 'PARCIALMENTE EN ALMACEN', 'EN ALMACEN'];
 
+const ADMIN_EMAILS = [
+  'yleon@padovasac.com',
+  'yrvingleon@hotmail.com',
+  'admin@padova.com',
+  'marcoespimo13@gmail.com',
+  'marco1388@hotmail.com',
+];
+
 const normalizeEstado = (estado) => String(estado || '')
   .normalize('NFD')
   .replace(/[̀-ͯ]/g, '')
@@ -104,7 +112,7 @@ function App() {
   const [baseCurrency, setBaseCurrency] = useState('PEN');
   const [exchangeRate, setExchangeRate] = useState(3.40);
 
-  const isAdmin = session?.user?.email === 'yleon@padovasac.com' || session?.user?.email === 'yrvingleon@hotmail.com' || session?.user?.email === 'admin@padova.com';
+  const isAdmin = ADMIN_EMAILS.includes(session?.user?.email);
   const userEmail = session?.user?.email || 'Invitado';
 
   // Initialize DB and Load Data

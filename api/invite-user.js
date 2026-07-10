@@ -1,6 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
-const ADMIN_EMAILS = ['yleon@padovasac.com', 'yrvingleon@hotmail.com', 'admin@padova.com'];
+const ADMIN_EMAILS = [
+  'yleon@padovasac.com',
+  'yrvingleon@hotmail.com',
+  'admin@padova.com',
+  'marcoespimo13@gmail.com',
+  'marco1388@hotmail.com',
+];
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
